@@ -28,13 +28,11 @@ import io.aiven.kafka.connect.common.config.validators.FileCompressionTypeValida
 import io.aiven.kafka.connect.common.config.validators.SourcenameTemplateValidator;
 import io.aiven.kafka.connect.common.config.validators.TimeZoneValidator;
 import io.aiven.kafka.connect.common.config.validators.TimestampSourceValidator;
-import io.aiven.kafka.connect.common.grouper.RecordGrouperFactory;
 import io.aiven.kafka.connect.common.source.task.DistributionType;
 import io.aiven.kafka.connect.common.templating.Template;
 
 /**
- * Fragment to handle all file name extraction operations. Requires {@link OutputFormatFragment} and (@link
- * CompressionFragment}
+ * Fragment to handle all file name extraction operations.
  */
 public final class FileNameFragment extends ConfigFragment {
 
@@ -78,22 +76,6 @@ public final class FileNameFragment extends ConfigFragment {
      */
     public void validateDistributionType(final DistributionType distributionType) {
         new SourcenameTemplateValidator(distributionType).ensureValid(FILE_NAME_TEMPLATE_CONFIG, getSourceName());
-    }
-
-    /**
-     * Validate that the record grouper works with the fileNameTemplate and the max records per file.
-     */
-    public void validateRecordGrouper() {
-        // Special checks for {{key}} filename template.
-        final Template filenameTemplate = getFilenameTemplate();
-        final String groupType = RecordGrouperFactory.resolveRecordGrouperType(filenameTemplate);
-        final boolean isKeyBased = RecordGrouperFactory.KEY_RECORD.equals(groupType)
-                || RecordGrouperFactory.KEY_TOPIC_PARTITION_RECORD.equals(groupType);
-        if (isKeyBased && getMaxRecordsPerFile() > 1) {
-            final String msg = String.format("When %s is %s, %s must be either 1 or not set", FILE_NAME_TEMPLATE_CONFIG,
-                    filenameTemplate, FILE_MAX_RECORDS);
-            throw new ConfigException(msg);
-        }
     }
 
     /**
@@ -177,13 +159,7 @@ public final class FileNameFragment extends ConfigFragment {
      * @return the text of the filename template.
      */
     public String getFilename() {
-        if (has(FILE_NAME_TEMPLATE_CONFIG)) {
-            return cfg.getString(FILE_NAME_TEMPLATE_CONFIG);
-        }
-        final CompressionType compressionType = getCompressionType();
-        return FormatType.AVRO.equals(new OutputFormatFragment(cfg).getFormatType())
-                ? DEFAULT_FILENAME_TEMPLATE + ".avro" + compressionType.extension()
-                : DEFAULT_FILENAME_TEMPLATE + compressionType.extension();
+        return cfg.getString(FILE_NAME_TEMPLATE_CONFIG);
     }
 
     /**

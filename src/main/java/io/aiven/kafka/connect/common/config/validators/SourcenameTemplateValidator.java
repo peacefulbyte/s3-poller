@@ -16,12 +16,12 @@
 
 package io.aiven.kafka.connect.common.config.validators;
 
+import static io.aiven.kafka.connect.common.config.FilenameTemplateVariable.KEY;
 import static io.aiven.kafka.connect.common.config.FilenameTemplateVariable.PARTITION;
 import static io.aiven.kafka.connect.common.config.FilenameTemplateVariable.ParameterDescriptor;
 import static io.aiven.kafka.connect.common.config.FilenameTemplateVariable.START_OFFSET;
 import static io.aiven.kafka.connect.common.config.FilenameTemplateVariable.TIMESTAMP;
 import static io.aiven.kafka.connect.common.config.FilenameTemplateVariable.TOPIC;
-import static io.aiven.kafka.connect.common.grouper.RecordGrouperFactory.ALL_SUPPORTED_VARIABLES;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -93,7 +93,7 @@ public final class SourcenameTemplateValidator implements ConfigDef.Validator {
 
     private void validateVariables(final Set<String> variables) {
         final List<String> invalidVariables = new ArrayList<>(variables);
-        invalidVariables.removeAll(ALL_SUPPORTED_VARIABLES);
+        invalidVariables.removeAll(List.of(TOPIC.name, PARTITION.name, START_OFFSET.name, TIMESTAMP.name, KEY.name));
         if (!invalidVariables.isEmpty()) {
             final String variableText = invalidVariables.size() == 1 ? "variable" : "variables";
             throw new IllegalArgumentException(String.format(

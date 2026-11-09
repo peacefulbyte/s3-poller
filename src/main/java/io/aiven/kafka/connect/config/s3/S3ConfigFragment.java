@@ -18,10 +18,8 @@ package io.aiven.kafka.connect.config.s3;
 
 import java.net.URI;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.apache.kafka.common.config.AbstractConfig;
@@ -29,13 +27,8 @@ import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
 
 import io.aiven.kafka.connect.common.config.AbstractFragmentSetter;
-import io.aiven.kafka.connect.common.config.CompressionType;
 import io.aiven.kafka.connect.common.config.ConfigFragment;
-import io.aiven.kafka.connect.common.config.FileNameFragment;
-import io.aiven.kafka.connect.common.config.SourceConfigFragment;
-import io.aiven.kafka.connect.common.config.validators.FileCompressionTypeValidator;
 import io.aiven.kafka.connect.common.config.validators.NonEmptyPassword;
-import io.aiven.kafka.connect.common.config.validators.OutputFieldsValidator;
 import io.aiven.kafka.connect.common.config.validators.UrlValidator;
 import io.aiven.kafka.connect.iam.AwsStsEndpointConfig;
 import io.aiven.kafka.connect.iam.AwsStsRole;
@@ -54,60 +47,11 @@ import software.amazon.awssdk.services.s3.internal.BucketUtils;
 @SuppressWarnings({ "PMD.ExcessivePublicCount", "PMD.TooManyMethods", "PMD.ExcessiveImports", "PMD.GodClass" })
 public final class S3ConfigFragment extends ConfigFragment {
 
-    private static final Pattern UNIT_YYYY_PATTERN = Pattern
-            .compile("\\{\\{\\s*timestamp\\s*:\\s*unit\\s*=\\s*YYYY\\s*}}");
-
     private static final Logger LOGGER = LoggerFactory.getLogger(S3ConfigFragment.class);
-    @Deprecated
-    public static final String OUTPUT_COMPRESSION = "output_compression";
-    @Deprecated
-    public static final String OUTPUT_COMPRESSION_TYPE_GZIP = "gzip";
-    @Deprecated
-    public static final String OUTPUT_COMPRESSION_TYPE_NONE = "none";
 
-    @Deprecated
-    public static final String OUTPUT_FIELDS = "output_fields";
-    @Deprecated
-    public static final String TIMESTAMP_TIMEZONE = "timestamp.timezone";
-    @Deprecated
-    public static final String TIMESTAMP_SOURCE = "timestamp.source";
-    @Deprecated
-    public static final String OUTPUT_FIELD_NAME_KEY = "key";
-    @Deprecated
-    public static final String OUTPUT_FIELD_NAME_OFFSET = "offset";
-    @Deprecated
-    public static final String OUTPUT_FIELD_NAME_TIMESTAMP = "timestamp";
-    @Deprecated
-    public static final String OUTPUT_FIELD_NAME_VALUE = "value";
-    @Deprecated
-    public static final String OUTPUT_FIELD_NAME_HEADERS = "headers";
-
-    @Deprecated
-    public static final String AWS_ACCESS_KEY_ID = "aws_access_key_id";
-    @Deprecated
-    public static final String AWS_SECRET_ACCESS_KEY = "aws_secret_access_key";
-    @Deprecated
-    public static final String AWS_S3_BUCKET = "aws_s3_bucket";
-    @Deprecated
-    public static final String AWS_S3_ENDPOINT = "aws_s3_endpoint";
-    @Deprecated
-    public static final String AWS_S3_REGION = "aws_s3_region";
-    @Deprecated
-    public static final String AWS_S3_PREFIX = "aws_s3_prefix";
-    // FIXME since we support so far both old style and new style of property names
-    // Importance was set to medium,
-    // as soon we will migrate to new values it must be set to HIGH
-    // same for default value
     public static final String AWS_ACCESS_KEY_ID_CONFIG = "aws.access.key.id";
     public static final String AWS_SECRET_ACCESS_KEY_CONFIG = "aws.secret.access.key";
     public static final String AWS_CREDENTIALS_PROVIDER_CONFIG = "aws.credentials.provider";
-    /**
-     * not used in codebase
-     *
-     * @deprecated to be removed
-     */
-    @Deprecated
-    public static final String AWS_CREDENTIAL_PROVIDER_DEFAULT = "com.amazonaws.auth.DefaultAWSCredentialsProviderChain";
     public static final String AWS_S3_BUCKET_NAME_CONFIG = "aws.s3.bucket.name";
     public static final String AWS_S3_SSE_ALGORITHM_CONFIG = "aws.s3.sse.algorithm";
     public static final String AWS_S3_ENDPOINT_CONFIG = "aws.s3.endpoint";
@@ -126,9 +70,6 @@ public final class S3ConfigFragment extends ConfigFragment {
     public static final String AWS_S3_RETRY_BACKOFF_MAX_RETRIES_CONFIG = "aws.s3.backoff.max.retries";
 
     public static final String FETCH_PAGE_SIZE = "aws.s3.fetch.page.size";
-    /** @deprecated use SourceConfigFragment.RING_BUFFER_SIZE */
-    @Deprecated
-    public static final String AWS_S3_FETCH_BUFFER_SIZE = "aws.s3.fetch.buffer.size";
 
     private static final String GROUP_AWS = "AWS";
     private static final String GROUP_AWS_STS = "AWS STS";
@@ -166,7 +107,6 @@ public final class S3ConfigFragment extends ConfigFragment {
     public static ConfigDef update(final ConfigDef configDef) {
         addAwsConfigGroup(configDef);
         addAwsStsConfigGroup(configDef);
-        addDeprecatedConfiguration(configDef);
         addS3RetryPolicies(configDef);
         return configDef;
     }
@@ -242,25 +182,6 @@ public final class S3ConfigFragment extends ConfigFragment {
         configDef.define(FETCH_PAGE_SIZE, ConfigDef.Type.INT, 10, ConfigDef.Range.atLeast(1),
                 ConfigDef.Importance.MEDIUM, "AWS S3 Fetch page size", GROUP_AWS, ++awsGroupCounter,
                 ConfigDef.Width.NONE, FETCH_PAGE_SIZE);
-
-        configDef.define(AWS_S3_FETCH_BUFFER_SIZE, ConfigDef.Type.INT, 1000, new ConfigDef.Validator() {
-            ConfigDef.Range range = ConfigDef.Range.atLeast(1);
-
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, AWS_S3_FETCH_BUFFER_SIZE, SourceConfigFragment.RING_BUFFER_SIZE);
-                }
-                range.ensureValid(name, value);
-            }
-
-            @Override
-            public String toString() {
-                return range.toString();
-            }
-        }, ConfigDef.Importance.MEDIUM,
-                "AWS S3 Fetch buffer size, this is the number of s3object keys kept in a buffer to ensure lexically older objet keys aren't skipped for processing if they are slower to upload.",
-                GROUP_AWS, ++awsGroupCounter, ConfigDef.Width.NONE, AWS_S3_FETCH_BUFFER_SIZE);
     }
 
     static void addAwsStsConfigGroup(final ConfigDef configDef) {
@@ -285,122 +206,6 @@ public final class S3ConfigFragment extends ConfigFragment {
         configDef.define(AWS_STS_CONFIG_ENDPOINT, ConfigDef.Type.STRING, AwsStsEndpointConfig.AWS_STS_GLOBAL_ENDPOINT,
                 new ConfigDef.NonEmptyString(), ConfigDef.Importance.MEDIUM, "AWS STS Config Endpoint", GROUP_AWS_STS,
                 ++awsStsGroupCounter, ConfigDef.Width.NONE, AWS_STS_CONFIG_ENDPOINT);
-    }
-
-    @SuppressWarnings({ "PMD.CognitiveComplexity", "PMD.NPathComplexity" })
-    static void addDeprecatedConfiguration(final ConfigDef configDef) {
-
-        configDef.define(AWS_ACCESS_KEY_ID, ConfigDef.Type.PASSWORD, null, new NonEmptyPassword() {
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, AWS_ACCESS_KEY_ID, AWS_ACCESS_KEY_ID_CONFIG);
-                }
-                super.ensureValid(name, value);
-            }
-        }, ConfigDef.Importance.MEDIUM, "AWS Access Key ID");
-
-        configDef.define(AWS_SECRET_ACCESS_KEY, ConfigDef.Type.PASSWORD, null, new NonEmptyPassword() {
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, AWS_SECRET_ACCESS_KEY, AWS_SECRET_ACCESS_KEY_CONFIG);
-                }
-                super.ensureValid(name, value);
-            }
-        }, ConfigDef.Importance.MEDIUM, "AWS Secret Access Key");
-
-        configDef.define(AWS_S3_BUCKET, ConfigDef.Type.STRING, null, new BucketNameValidator() {
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, AWS_S3_BUCKET, AWS_S3_BUCKET_NAME_CONFIG);
-                }
-                super.ensureValid(name, value);
-            }
-        }, ConfigDef.Importance.MEDIUM, "AWS S3 Bucket name");
-
-        configDef.define(AWS_S3_ENDPOINT, ConfigDef.Type.STRING, null, new UrlValidator() {
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, AWS_S3_ENDPOINT, AWS_S3_ENDPOINT_CONFIG);
-                }
-                super.ensureValid(name, value);
-            }
-        }, ConfigDef.Importance.LOW, "Explicit AWS S3 Endpoint Address, mainly for testing");
-
-        configDef.define(AWS_S3_REGION, ConfigDef.Type.STRING, null, new AwsRegionValidator() {
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, AWS_S3_REGION, AWS_S3_REGION_CONFIG);
-                }
-                super.ensureValid(name, value);
-            }
-        }, ConfigDef.Importance.MEDIUM, "AWS S3 Region, for example us-east-1");
-
-        configDef.define(AWS_S3_PREFIX, ConfigDef.Type.STRING, null, new ConfigDef.NonEmptyString() {
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, AWS_S3_PREFIX, AWS_S3_PREFIX_CONFIG);
-                }
-                super.ensureValid(name, value);
-            }
-        }, ConfigDef.Importance.MEDIUM, "Prefix for stored objects, for example cluster-1/");
-
-        configDef.define(OUTPUT_FIELDS, ConfigDef.Type.LIST, null, new OutputFieldsValidator() {
-            @Override
-            public void ensureValid(final String name, final Object value) {
-                if (Objects.nonNull(value)) {
-                    logDeprecated(LOGGER, OUTPUT_FIELDS);
-                }
-                super.ensureValid(name, value);
-            }
-        }, ConfigDef.Importance.MEDIUM,
-                "Output fields. A comma separated list of one or more: " + OUTPUT_FIELD_NAME_KEY + ", "
-                        + OUTPUT_FIELD_NAME_OFFSET + ", " + OUTPUT_FIELD_NAME_TIMESTAMP + ", " + OUTPUT_FIELD_NAME_VALUE
-                        + ", " + OUTPUT_FIELD_NAME_HEADERS);
-
-        configDef.define(OUTPUT_COMPRESSION, ConfigDef.Type.STRING, null, new FileCompressionTypeValidator(),
-                ConfigDef.Importance.MEDIUM, "Output compression. Valid values are: " + CompressionType.GZIP.name()
-                        + " and " + CompressionType.NONE.name());
-    }
-
-    public static Map<String, String> handleDeprecations(final Map<String, String> properties) {
-        handleDeprecatedYyyyUppercase(properties);
-        if (properties.containsKey(AWS_S3_FETCH_BUFFER_SIZE)) {
-            SourceConfigFragment.setter(properties)
-                    .ringBufferSize(Integer.parseInt(properties.get(AWS_S3_FETCH_BUFFER_SIZE)));
-            properties.remove(AWS_S3_FETCH_BUFFER_SIZE);
-        }
-        return properties;
-    }
-
-    private static String doReplaceYYYY(final String template) {
-        if (template != null) {
-            final String newTemplate = UNIT_YYYY_PATTERN.matcher(template)
-                    .replaceAll(matchResult -> matchResult.group().replace("YYYY", "yyyy"));
-
-            if (!newTemplate.equals(template)) {
-                LOGGER.warn(
-                        "{{timestamp:unit=YYYY}} is no longer supported, please use {{timestamp:unit=yyyy}} instead. It was automatically replaced: {}",
-                        newTemplate);
-            }
-            return newTemplate;
-        }
-        return template;
-    }
-
-    public static Map<String, String> handleDeprecatedYyyyUppercase(final Map<String, String> properties) {
-        if (!properties.containsKey(AWS_S3_PREFIX_CONFIG)) {
-            return properties;
-        }
-
-        final var result = new HashMap<>(properties);
-        result.put(AWS_S3_PREFIX_CONFIG, doReplaceYYYY(properties.get(AWS_S3_PREFIX_CONFIG)));
-        return result;
     }
 
     @Override
@@ -432,9 +237,8 @@ public final class S3ConfigFragment extends ConfigFragment {
     }
 
     public void validateBucket() {
-        if (Objects.isNull(cfg.getString(AWS_S3_BUCKET_NAME_CONFIG)) && Objects.isNull(cfg.getString(AWS_S3_BUCKET))) {
-            throw new ConfigException(String.format("Neither %s nor %s properties have been set",
-                    AWS_S3_BUCKET_NAME_CONFIG, AWS_S3_BUCKET));
+        if (Objects.isNull(cfg.getString(AWS_S3_BUCKET_NAME_CONFIG))) {
+            throw new ConfigException(String.format("%s property has not been set", AWS_S3_BUCKET_NAME_CONFIG));
         }
     }
 
@@ -504,37 +308,24 @@ public final class S3ConfigFragment extends ConfigFragment {
 
             return AwsBasicCredentials.create(cfg.getPassword(AWS_ACCESS_KEY_ID_CONFIG).value(),
                     cfg.getPassword(AWS_SECRET_ACCESS_KEY_CONFIG).value());
-        } else if (Objects.nonNull(cfg.getPassword(AWS_ACCESS_KEY_ID))
-                && Objects.nonNull(cfg.getPassword(AWS_SECRET_ACCESS_KEY))) {
-            LOGGER.warn("Config options {} and {} are not supported for this Connector", AWS_ACCESS_KEY_ID,
-                    AWS_SECRET_ACCESS_KEY);
-
         }
         return null;
     }
 
     public String getAwsS3EndPoint() {
-        return Objects.nonNull(cfg.getString(AWS_S3_ENDPOINT_CONFIG))
-                ? cfg.getString(AWS_S3_ENDPOINT_CONFIG)
-                : cfg.getString(AWS_S3_ENDPOINT);
+        return cfg.getString(AWS_S3_ENDPOINT_CONFIG);
     }
 
     public Region getAwsS3RegionV2() {
-        // we have priority of properties if old one not set or both old and new one set
-        // the new property value will be selected
         if (Objects.nonNull(cfg.getString(AWS_S3_REGION_CONFIG))) {
             return Region.of(cfg.getString(AWS_S3_REGION_CONFIG));
-        } else if (Objects.nonNull(cfg.getString(AWS_S3_REGION))) {
-            return Region.of(cfg.getString(AWS_S3_REGION));
         } else {
             return Region.of(Region.US_EAST_1.id());
         }
     }
 
     public String getAwsS3BucketName() {
-        return Objects.nonNull(cfg.getString(AWS_S3_BUCKET_NAME_CONFIG))
-                ? cfg.getString(AWS_S3_BUCKET_NAME_CONFIG)
-                : cfg.getString(AWS_S3_BUCKET);
+        return cfg.getString(AWS_S3_BUCKET_NAME_CONFIG);
     }
 
     public String getServerSideEncryptionAlgorithmName() {
@@ -542,9 +333,7 @@ public final class S3ConfigFragment extends ConfigFragment {
     }
 
     public String getAwsS3Prefix() {
-        return Objects.nonNull(cfg.getString(AWS_S3_PREFIX_CONFIG))
-                ? cfg.getString(AWS_S3_PREFIX_CONFIG)
-                : cfg.getString(AWS_S3_PREFIX);
+        return cfg.getString(AWS_S3_PREFIX_CONFIG);
     }
 
     public int getAwsS3PartSize() {
@@ -576,26 +365,6 @@ public final class S3ConfigFragment extends ConfigFragment {
 
     public int getFetchPageSize() {
         return cfg.getInt(FETCH_PAGE_SIZE);
-    }
-
-    /**
-     * Handle moving deprecated values.
-     *
-     * @param properties
-     *            the properties to update.
-     * @return the updated properties.
-     */
-    public static Map<String, String> handleDeprecatedOptions(final Map<String, String> properties) {
-        // we need to have the old OUTPUT_COMPRESSION take priority over the new FILE_COMPRESSION_TYPE_CONFIG
-        final String newValue = properties.get(FileNameFragment.FILE_COMPRESSION_TYPE_CONFIG);
-        final String oldValue = properties.get(OUTPUT_COMPRESSION);
-        if (oldValue != null) {
-            logDeprecated(LOGGER, OUTPUT_COMPRESSION, FileNameFragment.FILE_COMPRESSION_TYPE_CONFIG);
-            if (newValue == null) {
-                properties.put(FileNameFragment.FILE_COMPRESSION_TYPE_CONFIG, oldValue);
-            }
-        }
-        return properties;
     }
 
     /**
