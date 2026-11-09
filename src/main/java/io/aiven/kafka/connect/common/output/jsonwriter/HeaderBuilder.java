@@ -17,11 +17,9 @@
 package io.aiven.kafka.connect.common.output.jsonwriter;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.Objects;
 
 import org.apache.kafka.connect.header.Header;
-import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -30,14 +28,6 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 final class HeaderBuilder implements OutputFieldBuilder {
-
-    private final JsonConverter converter;
-
-    public HeaderBuilder() {
-        converter = new JsonConverter();
-        // TODO: make a more generic configuration
-        converter.configure(Map.of("schemas.enable", false, "converter.type", "header"));
-    }
 
     @Override
     public JsonNode build(final SinkRecord record) throws IOException {
@@ -49,20 +39,19 @@ final class HeaderBuilder implements OutputFieldBuilder {
 
         final ArrayNode root = JsonNodeFactory.instance.arrayNode();
 
-        final String topic = record.topic();
         for (final Header header : record.headers()) {
             final ObjectNode headerRoot = JsonNodeFactory.instance.objectNode();
             final String key = header.key();
             headerRoot.put("key", key);
-            final JsonNode headerNode = nodeFromHeader(header, topic);
+            final JsonNode headerNode = nodeFromHeader(header);
             headerRoot.set("value", headerNode);
             root.add(headerRoot);
         }
         return root;
     }
 
-    private JsonNode nodeFromHeader(final Header header, final String topic) throws IOException {
-        return ObjectMapperProvider.get()
-                .readTree(converter.fromConnectHeader(topic, header.key(), header.schema(), header.value()));
+    private JsonNode nodeFromHeader(final Header header) throws IOException {
+        // 替代 JsonConverter.fromConnectHeader：sink 死代码，仅保持编译，直接按值转 JsonNode
+        return ObjectMapperProvider.get().valueToTree(header.value());
     }
 }

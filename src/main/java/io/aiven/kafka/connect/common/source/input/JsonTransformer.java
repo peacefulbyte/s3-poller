@@ -24,7 +24,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
 import org.apache.kafka.connect.data.SchemaAndValue;
-import org.apache.kafka.connect.json.JsonConverter;
 
 import io.aiven.kafka.connect.common.config.SourceCommonConfig;
 import io.aiven.kafka.connect.common.source.task.Context;
@@ -37,15 +36,13 @@ import org.slf4j.LoggerFactory;
 
 public class JsonTransformer extends Transformer {
 
-    private final JsonConverter jsonConverter;
-
     private static final Logger LOGGER = LoggerFactory.getLogger(JsonTransformer.class);
 
+    /** 直接用 jackson 解析 JSONL，替代 JsonConverter（schemas.enable=false 语义，schema 为 null） */
     final ObjectMapper objectMapper = new ObjectMapper();
 
-    JsonTransformer(final JsonConverter jsonConverter) {
+    JsonTransformer() {
         super();
-        this.jsonConverter = jsonConverter;
     }
 
     @Override
@@ -84,9 +81,8 @@ public class JsonTransformer extends Transformer {
                         }
                     }
                     line = line.trim();
-                    // toConnectData does not actually use topic in the conversion so its fine if it is null.
-                    action.accept(jsonConverter.toConnectData(context.getTopic().orElse(null),
-                            line.getBytes(StandardCharsets.UTF_8)));
+                    // 每行一个 JSON 对象/标量；schema=null 与 JsonConverter schemas.enable=false 语义一致
+                    action.accept(new SchemaAndValue(null, objectMapper.readValue(line, Object.class)));
                     return true;
                 } catch (IOException e) {
                     LOGGER.error("Error reading input stream: {}", e.getMessage(), e);

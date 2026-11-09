@@ -12,8 +12,8 @@
 
     <!-- 必须 >= 2.26.0：S3ClientFactory 使用了新版 retryStrategy / ExponentialDelayWithJitter -->
     <aws.sdk.version>2.29.34</aws.sdk.version>
-    <!-- Kafka Connect 运行环境版本，kafka-clients / connect-api / connect-runtime 保持同版本 -->
-    <!-- 必须为 3.3.x：KafkaFragment 使用了 WorkerConfig.LISTENERS_CONFIG 等常量，3.4+ 已移除 -->
+    <!-- Kafka Connect 运行环境版本，kafka-clients / connect-api 保持同版本 -->
+    <!-- 必须为 3.3.x：connect-api 的 Schema 等数据类与 JsonConverter 在此系列稳定 -->
     <kafka.version>3.3.1</kafka.version>
     <confluent.version>7.2.2</confluent.version>
     <aiven-commons.version>0.2.0</aiven-commons.version>
@@ -80,18 +80,11 @@
       <artifactId>kafka-clients</artifactId>
       <version>${kafka.version}</version>
     </dependency>
-    <!-- SourceRecord / SinkRecord / Schema / ConnectException 等 -->
+    <!-- SourceRecord / SinkRecord / Schema / ConnectException 等（仅作数据类依赖，不再作为 Connect 插件运行） -->
     <dependency>
       <groupId>org.apache.kafka</groupId>
       <artifactId>connect-api</artifactId>
       <version>${kafka.version}</version>
-    </dependency>
-    <!-- ConnectorConfig / WorkerConfig / ToleranceType / Converter，由 Connect 运行环境提供 -->
-    <dependency>
-      <groupId>org.apache.kafka</groupId>
-      <artifactId>connect-runtime</artifactId>
-      <version>${kafka.version}</version>
-      <scope>provided</scope>
     </dependency>
 
     <!-- ========== Avro / Parquet / Hadoop / Confluent ========== -->
@@ -146,9 +139,26 @@
     </dependency>
 
     <!-- ========== JSON ========== -->
+    <!-- 显式固定 jackson 三件套版本，避免 kafka/confluent 传递的旧版（如 2.14.2）在运行时胜出导致缺类 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-annotations</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <!-- YAML 配置文件解析（PollerConfig），基于 jackson-databind -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
       <version>${jackson.version}</version>
     </dependency>
 
@@ -198,6 +208,12 @@
       <artifactId>slf4j-api</artifactId>
       <version>${slf4j.version}</version>
     </dependency>
+    <!-- 独立运行的日志后端：slf4j-simple 输出到 stderr，无需外部配置文件 -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
 
     <!-- ========== 编译期注解 ========== -->
     <!-- edu.umd.cs.findbugs.annotations.SuppressFBWarnings -->
@@ -218,6 +234,45 @@
         <configuration>
           <release>${maven.compiler.release}</release>
         </configuration>
+      </plugin>
+      <!-- 打包单一可执行 fat jar：java -jar s3-poller.jar [poller.yaml] -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.3</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <finalName>s3-poller</finalName>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <!-- 可执行入口指向 PollerMain -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>io.aiven.kafka.connect.s3.poller.PollerMain</mainClass>
+                </transformer>
+                <!-- 合并 AWS SDK 等依赖的 META-INF/services 注册文件，否则运行时 ServiceLoader 找不到实现 -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheLicenseResourceTransformer"/>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <!-- 去除 jar 签名文件，否则运行时抛 SecurityException -->
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

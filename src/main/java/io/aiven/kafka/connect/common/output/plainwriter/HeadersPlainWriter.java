@@ -22,15 +22,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Objects;
 
-import org.apache.kafka.connect.converters.ByteArrayConverter;
-import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.header.Header;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 public class HeadersPlainWriter implements OutputFieldPlainWriter {
     private static final byte[] HEADER_KEY_VALUE_SEPARATOR = ":".getBytes(StandardCharsets.UTF_8);
     private static final byte[] HEADERS_SEPARATOR = ";".getBytes(StandardCharsets.UTF_8);
-    private final ByteArrayConverter byteArrayConverter = new ByteArrayConverter();
 
     @Override
     public void write(final SinkRecord record, final OutputStream outputStream) throws IOException {
@@ -38,13 +35,13 @@ public class HeadersPlainWriter implements OutputFieldPlainWriter {
         Objects.requireNonNull(outputStream, "outputStream cannot be null");
 
         for (final Header header : record.headers()) {
-            final String topic = record.topic();
             final String key = header.key();
             final Object value = header.value();
-            final Schema schema = header.schema();
             outputStream.write(Base64.getEncoder().encode(key.getBytes(StandardCharsets.UTF_8)));
             outputStream.write(HEADER_KEY_VALUE_SEPARATOR);
-            final byte[] bytes = byteArrayConverter.fromConnectHeader(topic, key, schema, value);
+            // 替代 ByteArrayConverter.fromConnectHeader：sink 死代码，仅保持编译，按值转字节
+            final byte[] bytes = value instanceof byte[] ? (byte[]) value
+                    : String.valueOf(value).getBytes(StandardCharsets.UTF_8);
             outputStream.write(Base64.getEncoder().encode(bytes));
             outputStream.write(HEADERS_SEPARATOR);
         }

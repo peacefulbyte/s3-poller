@@ -17,6 +17,7 @@
 package io.aiven.kafka.connect.common.source;
 
 import java.io.InputStream;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Optional;
@@ -50,17 +51,18 @@ import org.slf4j.Logger;
  *            the native object type.
  * @param <K>
  *            the key type for the native object.
- * @param <O>
- *            the OffsetManagerEntry for the iterator.
  * @param <T>
  *            The source record for the client type.
  *
  */
-public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O extends OffsetManager.OffsetManagerEntry<O>, T extends AbstractSourceRecord<K, N, O, T>>
+public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T extends AbstractSourceRecord<K, N, T>>
         implements
             Iterator<T> {
-    /** The OffsetManager that we are using */
-    private final OffsetManager<O> offsetManager;
+    /**
+     * Function that returns the number of records already extracted for a native item. Used to resume reading an
+     * object from the middle after a restart; returns 0 when the object has not been processed before.
+     */
+    private final Function<K, Long> initialRecordCounts;
 
     /** The configuration for the source */
     private final SourceCommonConfig sourceConfig;
@@ -103,23 +105,25 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O
      *
      * @param sourceConfig
      *            The source configuration.
-     * @param offsetManager
-     *            the Offset manager to use.
      * @param transformer
      *            the transformer to use.
      * @param ringBufferSize
      *            the size of the ring buffer.
+     * @param initialRecordCounts
+     *            function to query the number of records already extracted for a native item.
+     * @param initialProcessedKeys
+     *            已处理的对象 key 列表（如从断点文件加载），构造时预填环形缓冲以跳过重复消费。
      */
-    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "stores mutable fields in offset manager to be reviewed before release")
-    public AbstractSourceRecordIterator(final SourceCommonConfig sourceConfig, final OffsetManager<O> offsetManager,
-            final Transformer transformer, final int ringBufferSize) {
+    public AbstractSourceRecordIterator(final SourceCommonConfig sourceConfig, final Transformer transformer,
+            final int ringBufferSize, final Function<K, Long> initialRecordCounts,
+            final Collection<K> initialProcessedKeys) {
         super();
 
         final DistributionType distributionType = sourceConfig.getDistributionType();
         final int maxTasks = sourceConfig.getMaxTasks();
 
         this.sourceConfig = sourceConfig;
-        this.offsetManager = offsetManager;
+        this.initialRecordCounts = initialRecordCounts;
         this.transformer = transformer;
         this.taskId = sourceConfig.getTaskId() % maxTasks;
         this.taskAssignment = new TaskAssignment(distributionType.getDistributionStrategy(maxTasks));
@@ -130,6 +134,10 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O
         this.inner = Collections.emptyIterator();
         this.outer = Collections.emptyIterator();
         this.ringBuffer = new RingBuffer<>(Math.max(1, ringBufferSize));
+        // 预填已处理 key：重启后扫描时直接跳过，避免重复消费
+        if (initialProcessedKeys != null) {
+            initialProcessedKeys.forEach(ringBuffer::add);
+        }
     }
 
     /**
@@ -183,33 +191,15 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O
      */
     abstract protected T createSourceRecord(N nativeObject);
 
-    /**
-     * Creates an OffsetManagerEntry for a native object.
-     *
-     * @param nativeObject
-     *            the native object to create the OffsetManagerEntry for.
-     * @return An OffsetManagerEntry for a native object.
-     */
-    abstract protected O createOffsetManagerEntry(N nativeObject);
-
-    /**
-     * Creates an offset manager key for the native key.
-     *
-     * @param nativeKey
-     *            THe native key to create an offset manager key for.
-     * @return An offset manager key.
-     */
-    abstract protected OffsetManager.OffsetManagerKey getOffsetManagerKey(K nativeKey);
-
     @Override
     final public boolean hasNext() {
         if (!outer.hasNext() && lastSeenNativeKey != null) {
+            // 上一个对象的记录已全部产出：记入环形缓冲用于去重；断点持久化由轮询器拿到记录后完成
             // update the buffer to contain this new objectKey
             ringBuffer.add(lastSeenNativeKey);
-            // Remove the last seen from the offsetmanager as the file has been completely processed.
-            offsetManager.removeEntry(getOffsetManagerKey(lastSeenNativeKey));
         }
         if (!inner.hasNext() && !outer.hasNext()) {
+            // 当前批次已读完，重新扫描存储桶；起点优先取环形缓冲中最后处理过的 key
             inner = getNativeItemStream(ObjectUtils.getIfNull(ringBuffer.getNextEjected(), () -> {
                 getLogger().info("{} set, no alternative present in buffer will begin consuming from {}",
                         SourceConfigFragment.NATIVE_START_KEY, nativeStartKey);
@@ -241,11 +231,13 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O
      */
     @VisibleForTesting
     Stream<T> convert(final T sourceRecord) {
+        // 第三步：解析。先生成记录 key 并记下当前对象，供下一轮扫描定位起点
         sourceRecord
                 .setKeyData(transformer.getKeyData(sourceRecord.getNativeKey(), sourceRecord.getTopic(), sourceConfig));
 
         lastSeenNativeKey = sourceRecord.getNativeKey();
 
+        // 先按 file.compression.type 解压（Parquet 自带压缩，跳过外层解压），再交给 Transformer 逐条解析
         // parquet handles compression internally.
         final CompressionType compressionType = transformer instanceof ParquetTransformer
                 ? CompressionType.NONE
@@ -257,7 +249,7 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O
         return transformer
                 .getRecords(inputStream, sourceRecord.getNativeItemSize(), sourceRecord.getContext(), sourceConfig,
                         sourceRecord.getRecordCount())
-                .map(new Mapper<N, K, O, T>(sourceRecord));
+                .map(new Mapper<>(sourceRecord));
     }
 
     /**
@@ -268,12 +260,10 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O
      *            the native object type.
      * @param <K>
      *            the key type for the native object.
-     * @param <O>
-     *            the OffsetManagerEntry for the iterator.
      * @param <T>
      *            The source record for the client type.
      */
-    static class Mapper<N, K extends Comparable<K>, O extends OffsetManager.OffsetManagerEntry<O>, T extends AbstractSourceRecord<K, N, O, T>>
+    static class Mapper<N, K extends Comparable<K>, T extends AbstractSourceRecord<K, N, T>>
             implements
                 Function<SchemaAndValue, T> {
         /**
@@ -351,11 +341,8 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, O
                 final Context<K> context = optionalContext.get();
                 overrideContextTopic(context);
                 sourceRecord.setContext(context);
-                O offsetManagerEntry = createOffsetManagerEntry(nativeItem);
-                offsetManagerEntry = offsetManager
-                        .getEntry(offsetManagerEntry.getManagerKey(), offsetManagerEntry::fromProperties)
-                        .orElse(offsetManagerEntry);
-                sourceRecord.setOffsetManagerEntry(offsetManagerEntry);
+                // 断点续读：查询该对象已处理的记录数，解析时跳过
+                sourceRecord.setRecordCount(initialRecordCounts.apply(itemName));
                 return Optional.of(sourceRecord);
             }
             return Optional.empty();

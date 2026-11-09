@@ -17,18 +17,14 @@
 package io.aiven.kafka.connect.common.config;
 
 import static io.aiven.kafka.connect.common.source.task.DistributionType.OBJECT_HASH;
-import static org.apache.kafka.connect.runtime.ConnectorConfig.ERRORS_TOLERANCE_CONFIG;
 
 import java.util.Arrays;
-import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
-import org.apache.kafka.connect.runtime.errors.ToleranceType;
 
-import io.aiven.commons.kafka.config.validator.EnumValidator;
 import io.aiven.kafka.connect.common.source.task.DistributionType;
 
 import org.apache.commons.lang3.StringUtils;
@@ -40,7 +36,6 @@ public final class SourceConfigFragment extends ConfigFragment {
 
     private static final String MAX_POLL_RECORDS = "max.poll.records";
     public static final String TARGET_TOPIC = "topic";
-    private static final String ERRORS_TOLERANCE = "errors.tolerance";
     private static final String DISTRIBUTION_TYPE = "distribution.type";
 
     /* public so that deprecated users can reference it */
@@ -75,10 +70,6 @@ public final class SourceConfigFragment extends ConfigFragment {
 
         configDef.define(MAX_POLL_RECORDS, ConfigDef.Type.INT, 500, ConfigDef.Range.atLeast(1),
                 ConfigDef.Importance.MEDIUM, "Max poll records");
-        // KIP-298 Error Handling in Connect
-        configDef.define(ERRORS_TOLERANCE, ConfigDef.Type.STRING, ToleranceType.NONE.name(),
-                EnumValidator.caseInsensitive(ToleranceType.class), ConfigDef.Importance.MEDIUM,
-                "Indicates to the connector what level of exceptions are allowed before the connector stops.");
 
         // Offset Storage config group includes target topics
         configDef.define(TARGET_TOPIC, ConfigDef.Type.STRING, null, new ConfigDef.NonEmptyString(),
@@ -111,15 +102,6 @@ public final class SourceConfigFragment extends ConfigFragment {
      */
     public int getMaxPollRecords() {
         return cfg.getInt(MAX_POLL_RECORDS);
-    }
-
-    /**
-     * Gets the errors tolerance.
-     *
-     * @return the errors tolerance.
-     */
-    public ToleranceType getErrorsTolerance() {
-        return ToleranceType.valueOf(cfg.getString(ERRORS_TOLERANCE_CONFIG).toUpperCase(Locale.ROOT));
     }
 
     /**
@@ -193,17 +175,6 @@ public final class SourceConfigFragment extends ConfigFragment {
          */
         public Setter maxPollRecords(final int maxPollRecords) {
             return setValue(MAX_POLL_RECORDS, maxPollRecords);
-        }
-
-        /**
-         * Sets the error tolerance.
-         *
-         * @param tolerance
-         *            the error tolerance
-         * @return this.
-         */
-        public Setter errorsTolerance(final ToleranceType tolerance) {
-            return setValue(ERRORS_TOLERANCE, tolerance.name());
         }
 
         /**

@@ -17,39 +17,15 @@
 package io.aiven.kafka.connect.common.output.jsonwriter;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.Objects;
 
 import org.apache.kafka.connect.errors.DataException;
-import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
 class KeyBuilder implements OutputFieldBuilder {
 
-    private final JsonConverter converter;
-
-    public KeyBuilder() {
-        converter = new JsonConverter();
-        // TODO: make a more generic configuration
-        converter.configure(Map.of("schemas.enable", false, "converter.type", "key"));
-    }
-
-    /**
-     * Takes the {@link SinkRecord}'s key as a JSON.
-     *
-     * <p>
-     * If the key is {@code null}, it outputs nothing.
-     *
-     * <p>
-     * If the key is not {@code null}, it assumes the key <b>is</b> a JSON
-     *
-     * @param record
-     *            the record to get the key from
-     * @throws DataException
-     *             when the key is not convertible to Json
-     */
     @Override
     public JsonNode build(final SinkRecord record) throws IOException {
         Objects.requireNonNull(record, "record cannot be null");
@@ -57,7 +33,7 @@ class KeyBuilder implements OutputFieldBuilder {
             return null;
         }
 
-        return ObjectMapperProvider.get()
-                .readTree(converter.fromConnectData(record.topic(), record.keySchema(), record.key()));
+        // 替代 JsonConverter.fromConnectData：sink 死代码，仅保持编译，直接按值转 JsonNode
+        return ObjectMapperProvider.get().valueToTree(record.key());
     }
 }

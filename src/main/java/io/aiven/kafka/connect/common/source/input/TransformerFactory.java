@@ -16,12 +16,6 @@
 
 package io.aiven.kafka.connect.common.source.input;
 
-import static io.aiven.kafka.connect.common.config.TransformerFragment.SCHEMAS_ENABLE;
-
-import java.util.Map;
-
-import org.apache.kafka.connect.json.JsonConverter;
-
 import io.confluent.connect.avro.AvroData;
 
 /**
@@ -49,9 +43,8 @@ public final class TransformerFactory {
             case PARQUET :
                 return new ParquetTransformer(new AvroData(CACHE_SIZE));
             case JSONL :
-                final JsonConverter jsonConverter = new JsonConverter();
-                jsonConverter.configure(Map.of(SCHEMAS_ENABLE, "false"), false);
-                return new JsonTransformer(jsonConverter);
+                // JsonTransformer 内部用 jackson 解析，不再依赖 connect-runtime 的 JsonConverter
+                return new JsonTransformer();
             case BYTES :
                 return new ByteArrayTransformer();
             default :

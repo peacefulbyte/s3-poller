@@ -76,6 +76,7 @@ public class AWSV2SourceClient {
      * @return a Stream of S3Objects for the current state of the S3 storage.
      */
     public Stream<S3Object> getS3ObjectStream(final String startToken) {
+        // 扫描存储桶：从 startToken 之后开始，按 fetch.page.size 分页拉取对象元数据（懒加载）
         final ListObjectsV2Request request = ListObjectsV2Request.builder()
                 .bucket(bucketName)
                 .maxKeys(s3SourceConfig.getFetchPageSize())
@@ -85,6 +86,7 @@ public class AWSV2SourceClient {
 
         return Stream.iterate(s3Client.listObjectsV2(request), Objects::nonNull, response -> {
             // This is called every time next() is called on the iterator.
+            // 未读完则用 continuationToken 取下一页，读完返回 null 结束整个流
             if (response.isTruncated()) {
                 return s3Client.listObjectsV2(ListObjectsV2Request.builder()
                         .bucket(bucketName)
@@ -110,6 +112,7 @@ public class AWSV2SourceClient {
     }
 
     public IOSupplier<InputStream> getObject(final String objectKey) {
+        // 下载文件：整个对象读入内存，返回惰性的 InputStream 交给解析器逐条消费
         final GetObjectRequest getObjectRequest = GetObjectRequest.builder().bucket(bucketName).key(objectKey).build();
         final ResponseBytes<GetObjectResponse> s3ObjectResponse = s3Client.getObjectAsBytes(getObjectRequest);
         return s3ObjectResponse::asInputStream;

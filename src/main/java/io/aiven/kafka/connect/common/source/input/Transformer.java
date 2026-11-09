@@ -39,6 +39,7 @@ public abstract class Transformer {
             final long streamLength, final Context<?> context, final SourceCommonConfig sourceConfig,
             final long skipRecords) {
 
+        // 解析入口：按具体格式创建 Spliterator 逐条读取；skipRecords 用于从文件中段续读（断点恢复）
         final StreamSpliterator spliterator = createSpliterator(inputStreamIOSupplier, streamLength, context,
                 sourceConfig);
         return StreamSupport.stream(spliterator, false).onClose(spliterator::close).skip(skipRecords);

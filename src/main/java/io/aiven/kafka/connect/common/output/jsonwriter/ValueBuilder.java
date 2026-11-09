@@ -17,34 +17,15 @@
 package io.aiven.kafka.connect.common.output.jsonwriter;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.Objects;
 
 import org.apache.kafka.connect.errors.DataException;
-import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
 class ValueBuilder implements OutputFieldBuilder {
 
-    private final JsonConverter converter;
-
-    public ValueBuilder() {
-        converter = new JsonConverter();
-        // TODO: make a more generic configuration
-        converter.configure(Map.of("schemas.enable", false, "converter.type", "value"));
-    }
-
-    /**
-     * Takes the {@link SinkRecord}'s value as a JSON.
-     *
-     * @param record
-     *            the record to get the value from
-     * @return JsonNode Value transformed to any JSON value
-     * @throws DataException
-     *             when the value is not actually a JSON
-     */
     @Override
     public JsonNode build(final SinkRecord record) throws IOException {
         Objects.requireNonNull(record, "record cannot be null");
@@ -53,7 +34,7 @@ class ValueBuilder implements OutputFieldBuilder {
             return null;
         }
 
-        return ObjectMapperProvider.get()
-                .readTree(converter.fromConnectData(record.topic(), record.valueSchema(), record.value()));
+        // 替代 JsonConverter.fromConnectData：sink 死代码，仅保持编译，直接按值转 JsonNode
+        return ObjectMapperProvider.get().valueToTree(record.value());
     }
 }

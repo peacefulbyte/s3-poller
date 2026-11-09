@@ -17,16 +17,16 @@
 package io.aiven.kafka.connect.s3.source.utils;
 
 import java.io.InputStream;
+import java.util.Collection;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import io.aiven.kafka.connect.common.source.AbstractSourceRecordIterator;
-import io.aiven.kafka.connect.common.source.OffsetManager;
 import io.aiven.kafka.connect.common.source.input.Transformer;
 import io.aiven.kafka.connect.s3.source.config.S3SourceConfig;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.apache.commons.io.function.IOSupplier;
-import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.s3.model.S3Object;
@@ -37,27 +37,34 @@ import software.amazon.awssdk.services.s3.model.S3Object;
  */
 public final class S3SourceRecordIterator
         extends
-            AbstractSourceRecordIterator<String, S3Object, S3OffsetManagerEntry, S3SourceRecord> {
+            AbstractSourceRecordIterator<String, S3Object, S3SourceRecord> {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(S3SourceRecordIterator.class);
 
     /** The AWS client that provides the S3Objects */
     private final AWSV2SourceClient sourceClient;
 
-    /** The S3 bucket we are processing */
-    private final String bucket;
-
     /**
-     * /** The inner iterator to provides a base S3SourceRecord for an S3Object that has passed the filters and
-     * potentially had data extracted.
+     * 构造 S3 迭代器。
+     *
+     * @param s3SourceConfig
+     *            S3 源配置。
+     * @param transformer
+     *            数据转换器。
+     * @param sourceClient
+     *            S3 客户端。
+     * @param initialRecordCounts
+     *            查询对象已处理记录数的函数，用于断点续读。
+     * @param initialProcessedKeys
+     *            已处理的对象 key 列表，预填去重缓冲。
      */
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "source client has stores mutable fields")
-    public S3SourceRecordIterator(final S3SourceConfig s3SourceConfig,
-            final OffsetManager<S3OffsetManagerEntry> offsetManager, final Transformer transformer,
-            final AWSV2SourceClient sourceClient) {
+    public S3SourceRecordIterator(final S3SourceConfig s3SourceConfig, final Transformer transformer,
+            final AWSV2SourceClient sourceClient, final Function<String, Long> initialRecordCounts,
+            final Collection<String> initialProcessedKeys) {
 
-        super(s3SourceConfig, offsetManager, transformer, s3SourceConfig.getRingBufferSize());
-        this.bucket = s3SourceConfig.getAwsS3BucketName();
+        super(s3SourceConfig, transformer, s3SourceConfig.getRingBufferSize(), initialRecordCounts,
+                initialProcessedKeys);
         this.sourceClient = sourceClient;
     }
 
@@ -68,11 +75,13 @@ public final class S3SourceRecordIterator
 
     @Override
     protected Stream<S3Object> getNativeItemStream(final String offset) {
+        // 第一步：扫描存储桶，得到本次待处理的对象流
         return sourceClient.getS3ObjectStream(offset);
     }
 
     @Override
     protected IOSupplier<InputStream> getInputStream(final S3SourceRecord sourceRecord) {
+        // 第二步：按对象 key 下载文件内容
         return sourceClient.getObject(sourceRecord.getNativeKey());
     }
 
@@ -89,15 +98,5 @@ public final class S3SourceRecordIterator
     @Override
     protected S3SourceRecord createSourceRecord(final S3Object nativeObject) {
         return new S3SourceRecord(nativeObject);
-    }
-
-    @Override
-    protected S3OffsetManagerEntry createOffsetManagerEntry(final S3Object nativeObject) {
-        return new S3OffsetManagerEntry(bucket, nativeObject.key());
-    }
-
-    @Override
-    protected OffsetManager.OffsetManagerKey getOffsetManagerKey(final String nativeKey) {
-        return S3OffsetManagerEntry.asKey(bucket, StringUtils.defaultIfBlank(nativeKey, ""));
     }
 }

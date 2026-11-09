@@ -19,7 +19,6 @@ package io.aiven.kafka.connect.common.config;
 import java.util.Map;
 
 import org.apache.kafka.common.config.ConfigDef;
-import org.apache.kafka.connect.runtime.errors.ToleranceType;
 
 import io.aiven.kafka.connect.common.source.input.InputFormat;
 import io.aiven.kafka.connect.common.source.input.Transformer;
@@ -57,10 +56,6 @@ public class SourceCommonConfig extends CommonConfig {
 
     public String getTargetTopic() {
         return sourceConfigFragment.getTargetTopic();
-    }
-
-    public ToleranceType getErrorsTolerance() {
-        return sourceConfigFragment.getErrorsTolerance();
     }
 
     public DistributionType getDistributionType() {

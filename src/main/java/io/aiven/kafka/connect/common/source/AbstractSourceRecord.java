@@ -17,10 +17,6 @@
 package io.aiven.kafka.connect.common.source;
 
 import org.apache.kafka.connect.data.SchemaAndValue;
-import org.apache.kafka.connect.errors.ConnectException;
-import org.apache.kafka.connect.errors.DataException;
-import org.apache.kafka.connect.runtime.errors.ToleranceType;
-import org.apache.kafka.connect.source.SourceRecord;
 
 import io.aiven.kafka.connect.common.NativeInfo;
 import io.aiven.kafka.connect.common.source.task.Context;
@@ -34,20 +30,18 @@ import org.slf4j.Logger;
  *            the native object type.
  * @param <K>
  *            the key type for the native object.
- * @param <O>
- *            the OffsetManagerEntry for the iterator.
  * @param <T>
  *            the implementation class for AbstractSourceRecord.
  */
-public abstract class AbstractSourceRecord<K extends Comparable<K>, N, O extends OffsetManager.OffsetManagerEntry<O>, T extends AbstractSourceRecord<K, N, O, T>> {
+public abstract class AbstractSourceRecord<K extends Comparable<K>, N, T extends AbstractSourceRecord<K, N, T>> {
     /** The logger from the implementation class */
     private final Logger logger;
     /** the key for the source record */
     private SchemaAndValue keyData;
     /** The value for the source record. */
     private SchemaAndValue valueData;
-    /** The offset manager entry for this record */
-    private O offsetManagerEntry;
+    /** The number of records extracted from the native item. Used for checkpoint continuation. */
+    private long recordCount;
     /** The context associated with this record */
     private Context<K> context;
     /** The native info for this record. */
@@ -67,15 +61,14 @@ public abstract class AbstractSourceRecord<K extends Comparable<K>, N, O extends
     }
 
     /**
-     * Copy constructor for an abstract source record. This constructor makes a copy of the OffsetManagerEntry.
+     * Copy constructor for an abstract source record. This constructor makes a copy of the record count.
      *
      * @param sourceRecord
      *            the source record to copy.
      */
-    protected AbstractSourceRecord(final AbstractSourceRecord<K, N, O, T> sourceRecord) {
+    protected AbstractSourceRecord(final AbstractSourceRecord<K, N, T> sourceRecord) {
         this(sourceRecord.logger, sourceRecord.nativeInfo);
-        this.offsetManagerEntry = sourceRecord.offsetManagerEntry
-                .fromProperties(sourceRecord.getOffsetManagerEntry().getProperties());
+        this.recordCount = sourceRecord.recordCount;
         this.keyData = sourceRecord.keyData;
         this.valueData = sourceRecord.valueData;
         this.context = sourceRecord.context;
@@ -117,22 +110,30 @@ public abstract class AbstractSourceRecord<K extends Comparable<K>, N, O extends
     }
 
     /**
-     * Gets the record count as recorded by the OffsetManager for the native item that this source record is working
-     * with.
+     * Gets the record count for the native item that this source record is working with.
      *
-     * @return The record count as recorded by the OffsetManager for the native item that this source record is working
-     *         with.
+     * @return The record count for the native item that this source record is working with.
      */
     final public long getRecordCount() {
-        return offsetManagerEntry == null ? 0 : offsetManagerEntry.getRecordCount();
+        return recordCount;
     }
 
     /**
-     * Increments the record count as recorded by the OffsetManager for the native item that this source record is
-     * working with.
+     * Increments the record count for the native item that this source record is working with.
      */
     final public void incrementRecordCount() {
-        this.offsetManagerEntry.incrementRecordCount();
+        this.recordCount++;
+    }
+
+    /**
+     * Sets the number of records that have already been extracted from the native item. Used to resume reading an
+     * object from the middle after a restart.
+     *
+     * @param recordCount
+     *            the number of records already extracted.
+     */
+    final public void setRecordCount(final long recordCount) {
+        this.recordCount = recordCount;
     }
 
     /**
@@ -192,25 +193,6 @@ public abstract class AbstractSourceRecord<K extends Comparable<K>, N, O extends
     }
 
     /**
-     * Sets the offset manager entry for this source record.
-     *
-     * @param offsetManagerEntry
-     *            The offset manager entry for this source record.
-     */
-    final public void setOffsetManagerEntry(final O offsetManagerEntry) {
-        this.offsetManagerEntry = offsetManagerEntry.fromProperties(offsetManagerEntry.getProperties());
-    }
-
-    /**
-     * Gets the offset manager entry for this source record. Makes a defensive copy.
-     *
-     * @return A copy of the offset manager entry for this source record.
-     */
-    final public O getOffsetManagerEntry() {
-        return offsetManagerEntry.fromProperties(offsetManagerEntry.getProperties()); // return a defensive copy
-    }
-
-    /**
      * Gets the Context for this source record. Makes a defensive copy.
      *
      * @return A copy of the Context for this source record.
@@ -232,33 +214,16 @@ public abstract class AbstractSourceRecord<K extends Comparable<K>, N, O extends
     }
 
     /**
-     * Creates a SourceRecord that can be returned to a Kafka topic
+     * Converts this source record into a {@link PollerRecord} for the poller output layer.
      *
-     * @param tolerance
-     *            The error tolerance for the record processing.
-     * @param offsetManager
-     *            The offset manager for the offset entry.
-     * @return A kafka {@link SourceRecord SourceRecord} This can return null if error tolerance is set to 'All'
+     * @return a PollerRecord carrying topic/partition/key/value and the record count for checkpoint continuation.
      */
-    final public SourceRecord getSourceRecord(final ToleranceType tolerance, final OffsetManager<O> offsetManager) {
-        try {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Source Record: {} for Topic: {} , Partition: {}, recordCount: {}", getNativeKey(),
-                        getTopic(), getPartition(), getRecordCount());
-            }
-            offsetManager.addEntry(offsetManagerEntry);
-            return new SourceRecord(offsetManagerEntry.getManagerKey().getPartitionMap(),
-                    offsetManagerEntry.getProperties(), getTopic(), getPartition(), keyData.schema(), keyData.value(),
-                    valueData.schema(), valueData.value());
-        } catch (DataException e) {
-            if (ToleranceType.NONE.equals(tolerance)) {
-                throw new ConnectException("Data Exception caught during record to source record transformation", e);
-            } else {
-                logger.warn(
-                        "Data Exception caught during record to source record transformation {} . errors.tolerance set to 'all', logging warning and continuing to process.",
-                        e.getMessage(), e);
-                return null;
-            }
+    final public PollerRecord toPollerRecord() {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Poller Record: {} for Topic: {} , Partition: {}, recordCount: {}", getNativeKey(),
+                    getTopic(), getPartition(), getRecordCount());
         }
+        return new PollerRecord(getNativeKey().toString(), getTopic(), getPartition(), keyData, valueData,
+                getRecordCount(), getNativeItemSize());
     }
 }

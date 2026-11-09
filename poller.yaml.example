@@ -1,0 +1,61 @@
+# s3-poller 配置示例
+# 用法：java -jar s3-poller.jar --config poller.yaml
+
+s3:
+  # S3 兼容存储地址（MinIO / OSS / COS 等）；留空则使用官方 AWS
+  endpoint: http://127.0.0.1:9000
+  region: us-east-1
+  bucket: my-bucket
+  # 只扫描该前缀下的对象，可为空
+  prefix: logs/
+  accessKeyId: minioadmin
+  secretAccessKey: minioadmin
+  # 每次 ListObjects 的分页大小
+  fetchPageSize: 100
+  # 请求重试参数（指数退避 + 抖动）
+  retryBackoff:
+    delayMs: 100
+    maxDelayMs: 20000
+    maxRetries: 10
+
+poll:
+  # 一轮扫描完后的休眠秒数；有积压时可配置 0 连续扫描
+  intervalSeconds: 10
+  # 文件名过滤模板，如 {{topic}}-{{partition}}-{{start_offset}}；为空则匹配所有对象
+  filePattern: ""
+  # 对象外层压缩：none / gzip / snappy / zstd
+  compressionType: none
+  # 从该 key 开始消费；为空则从断点或桶首开始
+  nativeStartKey: ""
+  # 已消费对象 key 的去重缓冲大小，重启后由断点文件预填
+  ringBufferSize: 1000
+  # 单轮轮询最多输出的记录数，达到后先持久化断点再继续；0 表示不限制
+  maxPollRecords: 500
+
+parse:
+  # 输入格式：avro / parquet / jsonl / bytes
+  inputFormat: jsonl
+  # bytes 格式的切块大小
+  maxBufferSize: 4096
+
+output:
+  # 输出方式：file=本地文件（测试） / kafka=发送到 Kafka（生产）
+  type: file
+  file:
+    directory: ./out
+    # per-object=每个 S3 对象一个文件；append=全部追加到单一文件
+    mode: per-object
+  kafka:
+    bootstrapServers: localhost:9092
+    # 固定目标 topic；为空则使用 filePattern 中提取的 topic
+    topic: target-topic
+    acks: all
+    security:
+      protocol: PLAINTEXT
+      username: ""
+      password: ""
+
+offsets:
+  # 断点文件；进程重启后从该文件记录的 key 之后继续扫描，
+  # 同时用其中的已消费对象列表预填去重缓冲
+  file: ./offsets.json
