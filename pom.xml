@@ -1,0 +1,224 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.aiven</groupId>
+  <artifactId>s3-poller</artifactId>
+  <version>1.0</version>
+  <name>s3-poller</name>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>21</maven.compiler.release>
+
+    <!-- 必须 >= 2.26.0：S3ClientFactory 使用了新版 retryStrategy / ExponentialDelayWithJitter -->
+    <aws.sdk.version>2.29.34</aws.sdk.version>
+    <!-- Kafka Connect 运行环境版本，kafka-clients / connect-api / connect-runtime 保持同版本 -->
+    <!-- 必须为 3.3.x：KafkaFragment 使用了 WorkerConfig.LISTENERS_CONFIG 等常量，3.4+ 已移除 -->
+    <kafka.version>3.3.1</kafka.version>
+    <confluent.version>7.2.2</confluent.version>
+    <aiven-commons.version>0.2.0</aiven-commons.version>
+    <avro.version>1.11.3</avro.version>
+    <parquet.version>1.15.0</parquet.version>
+    <hadoop.version>3.4.0</hadoop.version>
+    <jackson.version>2.15.3</jackson.version>
+    <commons-lang3.version>3.17.0</commons-lang3.version>
+    <commons-io.version>2.18.0</commons-io.version>
+    <commons-collections4.version>4.4</commons-collections4.version>
+    <!-- 原始 Gradle 清单未声明以下两个版本，取兼容版本 -->
+    <commons-compress.version>1.27.1</commons-compress.version>
+    <guava.version>33.3.1-jre</guava.version>
+    <zstd.version>1.5.6-3</zstd.version>
+    <snappy.version>1.1.10.5</snappy.version>
+    <slf4j.version>1.7.36</slf4j.version>
+    <spotbugs-annotations.version>4.8.1</spotbugs-annotations.version>
+  </properties>
+
+  <repositories>
+    <!-- Confluent 的 avro converter / serializer 构件仅发布在此仓库，Maven Central 无此 artifact -->
+    <repository>
+      <id>confluent</id>
+      <url>https://packages.confluent.io/maven/</url>
+    </repository>
+  </repositories>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${aws.sdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- ========== AWS SDK v2 ========== -->
+    <!-- S3Client / S3Configuration / model / BucketUtils -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+    </dependency>
+    <!-- StsClient / StsAssumeRoleCredentialsProvider -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sts</artifactId>
+    </dependency>
+    <!-- auth / regions / sdk-core / retries 由上面两个传递引入 -->
+    <!-- 同步客户端的 HTTP 实现，S3Client.builder() 运行时必需 -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>url-connection-client</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- ========== Kafka / Kafka Connect ========== -->
+    <!-- org.apache.kafka.common.*（ConfigDef、ConfigException、MetricsReporter 等） -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+      <version>${kafka.version}</version>
+    </dependency>
+    <!-- SourceRecord / SinkRecord / Schema / ConnectException 等 -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>connect-api</artifactId>
+      <version>${kafka.version}</version>
+    </dependency>
+    <!-- ConnectorConfig / WorkerConfig / ToleranceType / Converter，由 Connect 运行环境提供 -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>connect-runtime</artifactId>
+      <version>${kafka.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- ========== Avro / Parquet / Hadoop / Confluent ========== -->
+    <!-- DataFileStream / GenericRecord / SchemaBuilder 等 -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+      <version>${avro.version}</version>
+    </dependency>
+    <!-- AvroParquetReader / AvroParquetWriter -->
+    <dependency>
+      <groupId>org.apache.parquet</groupId>
+      <artifactId>parquet-avro</artifactId>
+      <version>${parquet.version}</version>
+    </dependency>
+    <!-- ParquetReader / ParquetWriter / ParquetFileWriter / CompressionCodecName -->
+    <dependency>
+      <groupId>org.apache.parquet</groupId>
+      <artifactId>parquet-hadoop</artifactId>
+      <version>${parquet.version}</version>
+    </dependency>
+    <!-- parquet-hadoop 把 hadoop 声明为 provided，这里必须显式引入 org.apache.hadoop.conf.Configuration -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-api</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-runtime</artifactId>
+      <version>${hadoop.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <!-- io.confluent.connect.avro.AvroData / AvroDataConfig -->
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-connect-avro-data</artifactId>
+      <version>${confluent.version}</version>
+    </dependency>
+    <!-- io.confluent.kafka.serializers.NonRecordContainer -->
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
+      <version>${confluent.version}</version>
+    </dependency>
+
+    <!-- io.aiven.commons.kafka.config.validator.EnumValidator -->
+    <dependency>
+      <groupId>io.aiven.commons</groupId>
+      <artifactId>kafka-config</artifactId>
+      <version>${aiven-commons.version}</version>
+    </dependency>
+
+    <!-- ========== JSON ========== -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+
+    <!-- ========== Commons / Guava ========== -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>${commons-lang3.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>${commons-io.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-collections4</artifactId>
+      <version>${commons-collections4.version}</version>
+    </dependency>
+    <!-- org.apache.commons.compress.utils.IOUtils -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-compress</artifactId>
+      <version>${commons-compress.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>${guava.version}</version>
+    </dependency>
+
+    <!-- ========== 压缩编解码 ========== -->
+    <dependency>
+      <groupId>com.github.luben</groupId>
+      <artifactId>zstd-jni</artifactId>
+      <version>${zstd.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.xerial.snappy</groupId>
+      <artifactId>snappy-java</artifactId>
+      <version>${snappy.version}</version>
+    </dependency>
+
+    <!-- ========== 日志 ========== -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+
+    <!-- ========== 编译期注解 ========== -->
+    <!-- edu.umd.cs.findbugs.annotations.SuppressFBWarnings -->
+    <dependency>
+      <groupId>com.github.spotbugs</groupId>
+      <artifactId>spotbugs-annotations</artifactId>
+      <version>${spotbugs-annotations.version}</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
