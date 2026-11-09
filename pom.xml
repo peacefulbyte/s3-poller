@@ -80,7 +80,7 @@
       <artifactId>kafka-clients</artifactId>
       <version>${kafka.version}</version>
     </dependency>
-    <!-- SourceRecord / SinkRecord / Schema / ConnectException 等（仅作数据类依赖，不再作为 Connect 插件运行） -->
+    <!-- SourceRecord / SinkRecord / Schema / ConnectException 等数据类依赖 -->
     <dependency>
       <groupId>org.apache.kafka</groupId>
       <artifactId>connect-api</artifactId>

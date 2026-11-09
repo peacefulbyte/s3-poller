@@ -19,13 +19,12 @@ package io.aiven.kafka.connect.common.source;
 import org.apache.kafka.connect.data.SchemaAndValue;
 
 /**
- * 轮询器输出记录模型，替代 Kafka Connect 的 {@code SourceRecord}。
+ * 轮询器输出记录模型。
  *
  * <p>
  * 由 {@link AbstractSourceRecord#toPollerRecord()} 生成，携带一条已解析记录的全部信息：
  * 所属 S3 对象（nativeKey）、目标 topic/partition（可选）、解析出的 key/value 以及
- * 对象内的记录序号（recordCount，用于断点续读）。输出层（file / kafka）只消费本类型，
- * 不再感知 Kafka Connect 的 SourceRecord 概念。
+ * 对象内的记录序号（recordCount，用于断点续读）。输出层（file / kafka）只消费本类型。
  *
  * <p>
  * 不可变：所有字段构造时一次赋值。

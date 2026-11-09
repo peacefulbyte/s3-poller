@@ -33,7 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 基于本地 JSON 文件的断点存储，替代 Kafka Connect 的 offset storage。
+ * 基于本地 JSON 文件的断点存储。
  *
  * <p>
  * 保存最近一个<b>已完整消费</b>的 S3 对象：bucket / objectKey / recordCount，

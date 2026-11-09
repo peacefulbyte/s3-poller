@@ -38,7 +38,7 @@ public class JsonTransformer extends Transformer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(JsonTransformer.class);
 
-    /** 直接用 jackson 解析 JSONL，替代 JsonConverter（schemas.enable=false 语义，schema 为 null） */
+    /** 直接用 jackson 解析 JSONL（schemas.enable=false 语义，schema 为 null） */
     final ObjectMapper objectMapper = new ObjectMapper();
 
     JsonTransformer() {
@@ -81,7 +81,7 @@ public class JsonTransformer extends Transformer {
                         }
                     }
                     line = line.trim();
-                    // 每行一个 JSON 对象/标量；schema=null 与 JsonConverter schemas.enable=false 语义一致
+                    // 每行一个 JSON 对象/标量，schema=null
                     action.accept(new SchemaAndValue(null, objectMapper.readValue(line, Object.class)));
                     return true;
                 } catch (IOException e) {
