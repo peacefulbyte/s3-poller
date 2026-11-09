@@ -47,6 +47,8 @@ public final class TransformerFactory {
                 return new JsonTransformer();
             case BYTES :
                 return new ByteArrayTransformer();
+            case BYTES_LINE :
+                return new ByteLineTransformer();
             default :
                 throw new IllegalArgumentException("Unknown input format in configuration: " + inputFormat);
         }

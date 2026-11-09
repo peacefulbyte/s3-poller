@@ -33,9 +33,10 @@ poll:
   maxPollRecords: 500
 
 parse:
-  # 输入格式：avro / parquet / jsonl / bytes
+  # 输入格式：avro / parquet / jsonl / bytes / bytes-line
+  # bytes-line=按行切分原始字节透传（不解析、不解码，消费端按实际编码解码）
   inputFormat: jsonl
-  # bytes 格式的切块大小
+  # bytes 格式的切块大小；bytes-line 格式的单行最大字节数，超长行跳过并告警
   maxBufferSize: 4096
 
 output:

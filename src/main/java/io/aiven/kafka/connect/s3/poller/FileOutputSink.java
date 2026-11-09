@@ -41,8 +41,9 @@ import org.slf4j.LoggerFactory;
  * </ul>
  *
  * <p>
- * 编码与 Kafka 输出保持一致：JSONL 每行一条 JSON（UTF-8）；BYTES 原样字节；
- * AVRO/PARQUET 每条记录 = 4 字节大端长度前缀 + 裸 Avro 字节（长度前缀标记消息边界，对应 Kafka 单条消息）。
+ * 编码与 Kafka 输出保持一致：JSONL 每行一条 JSON（UTF-8）；BYTES/BYTES_LINE 原样字节
+ * （bytes-line 每行一条，写文件时补换行分隔）；AVRO/PARQUET 每条记录 = 4 字节大端长度前缀
+ * + 裸 Avro 字节（长度前缀标记消息边界，对应 Kafka 单条消息）。
  */
 public final class FileOutputSink implements OutputSink {
 
@@ -96,7 +97,8 @@ public final class FileOutputSink implements OutputSink {
             currentOut = Files.newOutputStream(currentFile, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
         currentOut.write(encodeRecord(record));
-        if (inputFormat == InputFormat.JSONL) {
+        if (inputFormat == InputFormat.JSONL || inputFormat == InputFormat.BYTES_LINE) {
+            // JSONL / bytes-line 均为逐行记录，写文件时补换行分隔
             currentOut.write('\n');
         }
     }
@@ -116,7 +118,8 @@ public final class FileOutputSink implements OutputSink {
     /** 按格式编码一条记录的输出字节 */
     private byte[] encodeRecord(final PollerRecord record) throws IOException {
         final byte[] value = encoder.encodeValue(record.valueData(), inputFormat);
-        if (inputFormat == InputFormat.JSONL || inputFormat == InputFormat.BYTES) {
+        if (inputFormat == InputFormat.JSONL || inputFormat == InputFormat.BYTES
+                || inputFormat == InputFormat.BYTES_LINE) {
             return value;
         }
         // AVRO/PARQUET：4 字节大端长度前缀，标记每条裸 Avro 消息的边界

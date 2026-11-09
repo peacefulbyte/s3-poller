@@ -94,9 +94,10 @@ public class PollerConfig {
      */
     public InputFormat inputFormat() {
         try {
-            return InputFormat.valueOf(parse.inputFormat.toUpperCase(Locale.ROOT));
+            return InputFormat.valueOf(parse.inputFormat.toUpperCase(Locale.ROOT).replace('-', '_'));
         } catch (final IllegalArgumentException e) {
-            throw new IllegalArgumentException("不支持的 inputFormat: " + parse.inputFormat + "，可选 avro/parquet/jsonl/bytes");
+            throw new IllegalArgumentException(
+                    "不支持的 inputFormat: " + parse.inputFormat + "，可选 avro/parquet/jsonl/bytes/bytes-line");
         }
     }
 
@@ -155,9 +156,9 @@ public class PollerConfig {
 
     /** 解析配置 */
     public static class Parse {
-        /** 输入格式：avro / parquet / jsonl / bytes */
+        /** 输入格式：avro / parquet / jsonl / bytes / bytes-line */
         public String inputFormat = "jsonl";
-        /** bytes 格式的切块大小 */
+        /** bytes 格式的切块大小；bytes-line 格式的单行最大字节数（超长行跳过并告警） */
         public int maxBufferSize = 4096;
     }
 

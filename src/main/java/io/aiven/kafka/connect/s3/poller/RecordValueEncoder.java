@@ -50,7 +50,7 @@ import org.apache.kafka.connect.data.Struct;
  *
  * <ul>
  * <li>{@code JSONL}：Connect 值转 JSON 文本（UTF-8），每行一条记录</li>
- * <li>{@code BYTES}：原样字节</li>
+ * <li>{@code BYTES}/{@code BYTES_LINE}：原样字节透传（bytes-line 每行一条）</li>
  * <li>{@code AVRO}/{@code PARQUET}：Connect 值经 {@link AvroData} 反转成 Avro 对象后，
  * 编码为<b>裸 Avro 二进制</b>（每条记录独立编码，不含 schema 头，消费端需已知 schema）</li>
  * </ul>
@@ -85,6 +85,8 @@ public final class RecordValueEncoder {
             case JSONL :
                 return encodeJson(valueData);
             case BYTES :
+            case BYTES_LINE :
+                // 原样字节透传：不解码、不转码，消费端自行按实际编码解码
                 return (byte[]) valueData.value();
             case AVRO :
             case PARQUET :

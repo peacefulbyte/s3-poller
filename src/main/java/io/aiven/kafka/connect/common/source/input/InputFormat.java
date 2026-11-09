@@ -19,7 +19,7 @@ package io.aiven.kafka.connect.common.source.input;
 import java.util.Locale;
 
 public enum InputFormat {
-    AVRO("avro"), PARQUET("parquet"), JSONL("jsonl"), BYTES("bytes");
+    AVRO("avro"), PARQUET("parquet"), JSONL("jsonl"), BYTES("bytes"), BYTES_LINE("bytes-line");
 
     private final String format;
 

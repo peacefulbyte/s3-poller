@@ -37,8 +37,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>
  * 直接把解析结果发送到 Kafka：key 为对象 key 的 UTF-8 字节，value 按输入格式编码
- * （JSONL 一条 JSON / BYTES 原样 / AVRO·PARQUET 裸 Avro 字节，见 {@link RecordValueEncoder}）。
- * 不接 Schema Registry，消费端需已知 schema。
+ * （JSONL 一条 JSON / BYTES·BYTES_LINE 原样字节 / AVRO·PARQUET 裸 Avro 字节，见 {@link RecordValueEncoder}）。
+ * 不接 Schema Registry，消费端需已知 schema（bytes-line 场景由消费端按实际编码解码）。
  *
  * <p>
  * 发送语义（at-least-once）：{@link #write} 异步发送；每批结束调 {@link #flush}，
