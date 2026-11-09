@@ -64,7 +64,7 @@ final public class S3SourceConfig extends SourceCommonConfig {
 
         // s3ConfigFragment is validated in this method as it is created here.
         // Other Fragments created in the ConfigDef are validated in the parent classes their instances are created in.
-        // e.g. SourceConfigFragment, FileNameFragment, TransformerFragment and OutputFormatFragment are all
+        // e.g. SourceConfigFragment, FileNameFragment and TransformerFragment are all
         // validated in SourceCommonConfig.
         s3ConfigFragment.validate();
     }
