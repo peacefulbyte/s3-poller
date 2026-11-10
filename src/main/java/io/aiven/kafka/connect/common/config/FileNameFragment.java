@@ -16,8 +16,6 @@
 
 package io.aiven.kafka.connect.common.config;
 
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.Map;
 
 import org.apache.kafka.common.config.AbstractConfig;
@@ -26,8 +24,6 @@ import org.apache.kafka.common.config.ConfigException;
 
 import io.aiven.kafka.connect.common.config.validators.FileCompressionTypeValidator;
 import io.aiven.kafka.connect.common.config.validators.SourcenameTemplateValidator;
-import io.aiven.kafka.connect.common.config.validators.TimeZoneValidator;
-import io.aiven.kafka.connect.common.config.validators.TimestampSourceValidator;
 import io.aiven.kafka.connect.common.source.task.DistributionType;
 import io.aiven.kafka.connect.common.templating.Template;
 
@@ -40,8 +36,6 @@ public final class FileNameFragment extends ConfigFragment {
     static final String GROUP_FILE = "File";
     public static final String FILE_COMPRESSION_TYPE_CONFIG = "file.compression.type";
     static final String FILE_MAX_RECORDS = "file.max.records";
-    static final String FILE_NAME_TIMESTAMP_TIMEZONE = "file.name.timestamp.timezone";
-    static final String FILE_NAME_TIMESTAMP_SOURCE = "file.name.timestamp.source";
     public static final String FILE_NAME_TEMPLATE_CONFIG = "file.name.template";
     static final String DEFAULT_FILENAME_TEMPLATE = "{{topic}}-{{partition}}-{{start_offset}}";
 
@@ -133,17 +127,6 @@ public final class FileNameFragment extends ConfigFragment {
                         + "0 is interpreted as \"unlimited\", which is the default.",
                 GROUP_FILE, ++fileGroupCounter, ConfigDef.Width.SHORT, FILE_MAX_RECORDS);
 
-        configDef.define(FILE_NAME_TIMESTAMP_TIMEZONE, ConfigDef.Type.STRING, ZoneOffset.UTC.toString(),
-                new TimeZoneValidator(), ConfigDef.Importance.LOW,
-                "Specifies the timezone in which the dates and time for the timestamp variable will be treated. "
-                        + "Use standard shot and long names. Default is UTC",
-                GROUP_FILE, ++fileGroupCounter, ConfigDef.Width.SHORT, FILE_NAME_TIMESTAMP_TIMEZONE);
-
-        configDef.define(FILE_NAME_TIMESTAMP_SOURCE, ConfigDef.Type.STRING, TimestampSource.Type.WALLCLOCK.name(),
-                new TimestampSourceValidator(), ConfigDef.Importance.LOW,
-                "Specifies the the timestamp variable source. Default is wall-clock.", GROUP_FILE, ++fileGroupCounter,
-                ConfigDef.Width.SHORT, FILE_NAME_TIMESTAMP_SOURCE);
-
         return configDef;
     }
 
@@ -180,25 +163,6 @@ public final class FileNameFragment extends ConfigFragment {
      */
     public Template getFilenameTemplate() {
         return Template.of(getFilename());
-    }
-
-    /**
-     * Gets the filename timezone
-     *
-     * @return The timezone specified for filenames.
-     */
-    public ZoneId getFilenameTimezone() {
-        return ZoneId.of(cfg.getString(FILE_NAME_TIMESTAMP_TIMEZONE));
-    }
-
-    /**
-     * Gets the timestamp source for the file name.
-     *
-     * @return the timestamp source for the file name.
-     */
-    public TimestampSource getFilenameTimestampSource() {
-        return TimestampSource.of(getFilenameTimezone(),
-                TimestampSource.Type.of(cfg.getString(FILE_NAME_TIMESTAMP_SOURCE)));
     }
 
     /**
@@ -252,39 +216,6 @@ public final class FileNameFragment extends ConfigFragment {
          */
         public Setter maxRecordsPerFile(final int maxRecordsPerFile) {
             return setValue(FILE_MAX_RECORDS, maxRecordsPerFile);
-        }
-
-        /**
-         * Sets the time stamp source.
-         *
-         * @param timestampSource
-         *            the time stamp source.
-         * @return this.
-         */
-        public Setter timestampSource(final TimestampSource timestampSource) {
-            return setValue(FILE_NAME_TIMESTAMP_SOURCE, timestampSource.type().name());
-        }
-
-        /**
-         * Sets the timestamp source from a type.
-         *
-         * @param type
-         *            the type to set the timestamp source to.
-         * @return this.
-         */
-        public Setter timestampSource(final TimestampSource.Type type) {
-            return setValue(FILE_NAME_TIMESTAMP_SOURCE, type.name());
-        }
-
-        /**
-         * Sets the timestamp timezone.
-         *
-         * @param timeZone
-         *            the timezone to se.t
-         * @return this
-         */
-        public Setter timestampTimeZone(final ZoneId timeZone) {
-            return setValue(FILE_NAME_TIMESTAMP_TIMEZONE, timeZone.toString());
         }
 
         /**

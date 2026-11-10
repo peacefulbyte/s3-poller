@@ -80,7 +80,8 @@
       <artifactId>kafka-clients</artifactId>
       <version>${kafka.version}</version>
     </dependency>
-    <!-- SourceRecord / SinkRecord / Schema / ConnectException 等数据类依赖 -->
+    <!-- connect.data 包的数据类（SchemaAndValue / Schema / Struct）作为解析链路记录载体；
+         kafka-connect-avro-data 的 AvroData.toConnectData 依赖这些类型 -->
     <dependency>
       <groupId>org.apache.kafka</groupId>
       <artifactId>connect-api</artifactId>
