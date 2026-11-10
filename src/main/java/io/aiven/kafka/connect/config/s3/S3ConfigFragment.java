@@ -33,6 +33,7 @@ import io.aiven.kafka.connect.common.config.validators.UrlValidator;
 import io.aiven.kafka.connect.iam.AwsStsEndpointConfig;
 import io.aiven.kafka.connect.iam.AwsStsRole;
 
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -171,7 +172,9 @@ public final class S3ConfigFragment extends ConfigFragment {
                 ConfigDef.Importance.LOW, "Explicit AWS S3 Endpoint Address, mainly for testing", GROUP_AWS,
                 ++awsGroupCounter, ConfigDef.Width.NONE, AWS_S3_ENDPOINT_CONFIG);
 
-        configDef.define(AWS_S3_REGION_CONFIG, ConfigDef.Type.STRING, null, new AwsRegionValidator(),
+        // region 的枚举校验在 validateRegion() 中执行：配置了自定义 endpoint（第三方 S3 兼容服务）
+        // 时允许任意 region（如腾讯云 COS 的 ap-nanjing），此处仅做非空校验
+        configDef.define(AWS_S3_REGION_CONFIG, ConfigDef.Type.STRING, null, new ConfigDef.NonEmptyString(),
                 ConfigDef.Importance.MEDIUM, "AWS S3 Region, e.g. us-east-1", GROUP_AWS, ++awsGroupCounter,
                 ConfigDef.Width.NONE, AWS_S3_REGION_CONFIG);
 
@@ -212,6 +215,31 @@ public final class S3ConfigFragment extends ConfigFragment {
     public void validate() {
         validateCredentials();
         validateBucket();
+        validateRegion();
+    }
+
+    /**
+     * 校验 region：配置了自定义 endpoint（第三方 S3 兼容服务，如腾讯云 COS）时允许任意 region
+     * （SDK 的 SigV4 签名直接使用该字符串）；否则要求是 AWS 官方区域。
+     */
+    private void validateRegion() {
+        final String region = cfg.getString(AWS_S3_REGION_CONFIG);
+        final boolean hasCustomEndpoint = StringUtils.isNotBlank(cfg.getString(AWS_S3_ENDPOINT_CONFIG));
+        if (region == null) {
+            if (hasCustomEndpoint) {
+                // 第三方服务的签名必须使用正确的地域名，不能静默回退到 us-east-1
+                throw new ConfigException(AWS_S3_REGION_CONFIG, null,
+                        "aws.s3.region must be set when aws.s3.endpoint is configured");
+            }
+            return;
+        }
+        if (!hasCustomEndpoint && Region.regions().stream().noneMatch(r -> r.id().equals(region))) {
+            throw new ConfigException(AWS_S3_REGION_CONFIG, region,
+                    "Supported values are: " + Region.regions()
+                            .stream()
+                            .map(Region::id)
+                            .collect(Collectors.joining(", ")));
+        }
     }
 
     public void validateCredentials() {
@@ -243,29 +271,6 @@ public final class S3ConfigFragment extends ConfigFragment {
     }
 
     // Custom Validators
-    protected static class AwsRegionValidator implements ConfigDef.Validator {
-        private static final String SUPPORTED_AWS_REGIONS = Region.regions()
-                .stream()
-                .map(Region::id)
-                .collect(Collectors.joining(", "));
-
-        @Override
-        public void ensureValid(final String name, final Object value) {
-            if (Objects.nonNull(value)) {
-                final String valueStr = (String) value;
-                if (Region.regions().stream().noneMatch(r -> r.id().equals(valueStr))) {
-                    throw new ConfigException(name, valueStr, toString());
-                }
-            }
-        }
-
-        @Override
-        public String toString() {
-            return "Supported values are: " + SUPPORTED_AWS_REGIONS;
-        }
-
-    }
-
     private static class BucketNameValidator implements ConfigDef.Validator {
         @Override
         public void ensureValid(final String name, final Object value) {

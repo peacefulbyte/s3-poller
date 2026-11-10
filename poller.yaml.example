@@ -5,6 +5,9 @@ s3:
   # S3 兼容存储地址（MinIO / OSS / COS 等）；留空则使用官方 AWS
   endpoint: http://127.0.0.1:9000
   region: us-east-1
+  # 是否 path-style 访问：true=桶名在 URL 路径中（MinIO 等无 DNS 解析的本地服务）；
+  # false=桶名作为子域名 virtual-hosted-style（默认，AWS / 腾讯云 COS 要求）
+  pathStyleAccess: true
   bucket: my-bucket
   # 只扫描该前缀下的对象，可为空
   prefix: logs/
@@ -24,6 +27,7 @@ poll:
   # 文件名过滤模板，如 {{topic}}-{{partition}}-{{start_offset}}；为空则匹配所有对象
   filePattern: ""
   # 对象外层压缩：none / gzip / snappy / zstd
+  # none=自动探测对象流文件头（gzip/zstd 命中才解压，否则按非压缩读取）
   compressionType: none
   # 从该 key 开始消费；为空则从断点或桶首开始
   nativeStartKey: ""
@@ -31,6 +35,8 @@ poll:
   ringBufferSize: 1000
   # 单轮轮询最多输出的记录数，达到后先持久化断点再继续；0 表示不限制
   maxPollRecords: 500
+  # 对象下载临时目录；为空使用系统临时目录。大对象建议配置专用目录，启动时会清理其中残留
+  downloadDir: ""
 
 parse:
   # 输入格式：avro / parquet / jsonl / bytes / bytes-line
@@ -57,6 +63,18 @@ output:
       password: ""
 
 offsets:
-  # 断点文件；进程重启后从该文件记录的 key 之后继续扫描，
+  # 断点存储类型：file=本地 JSON 文件 / mysql=MySQL 8.0 表
+  type: file
+  # type=file 时使用；进程重启后从该文件记录的 key 之后继续扫描，
   # 同时用其中的已消费对象列表预填去重缓冲
   file: ./offsets.json
+  # type=mysql 时使用（下表字段按需替换）
+  mysql:
+    # JDBC 连接串，如 jdbc:mysql://127.0.0.1:3306/s3_poller?useSSL=false
+    jdbcUrl: ""
+    username: ""
+    password: ""
+    # 断点表名，只允许字母/数字/下划线，启动时自动创建
+    table: s3_offset
+    # 已消费对象窗口大小；为空则取 poll.ringBufferSize
+    maxProcessedKeys: 1000

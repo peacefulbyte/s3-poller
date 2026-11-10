@@ -19,7 +19,6 @@ package io.aiven.kafka.connect.s3.poller;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -53,8 +52,8 @@ import org.slf4j.LoggerFactory;
  * <ul>
  * <li>每轮轮询结束时先 {@link OutputSink#flush()} 确认送达，成功才推进断点；
  * Kafka 发送失败时 flush 抛 IOException，断点不推进，重启后整批重发</li>
- * <li>断点文件同时维护最近已消费对象 key 列表，重启后预填迭代器的去重缓冲，
- * 扫描时跳过这些对象避免重复消费</li>
+ * <li>断点文件同时维护最近已消费对象的 key→eTag 映射，重启后预填迭代器的去重缓冲
+ * 与 eTag 表：key 相同但 eTag 不同（文件被覆盖）的对象会重新消费</li>
  * <li>单轮输出条数受 {@code poll.maxPollRecords} 限制，防止持续有新对象时
  * 断点长时间得不到持久化</li>
  * </ul>
@@ -67,14 +66,14 @@ public final class S3Poller implements AutoCloseable {
     static final String MATCH_ALL_PATTERN = ".*";
 
     private final PollerConfig config;
-    private final FileOffsetStore offsetStore;
+    private final OffsetStore offsetStore;
     private final OutputSink sink;
     private final S3SourceRecordIterator iterator;
     private final AWSV2SourceClient s3Client;
     private final String bucket;
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
-    private S3Poller(final PollerConfig config, final FileOffsetStore offsetStore, final OutputSink sink,
+    private S3Poller(final PollerConfig config, final OffsetStore offsetStore, final OutputSink sink,
             final S3SourceRecordIterator iterator, final AWSV2SourceClient s3Client, final String bucket) {
         this.config = config;
         this.offsetStore = offsetStore;
@@ -94,17 +93,26 @@ public final class S3Poller implements AutoCloseable {
      */
     public static S3Poller create(final PollerConfig config) {
         final S3SourceConfig s3SourceConfig = new S3SourceConfig(toSourceProps(config));
-        final AWSV2SourceClient s3Client = new AWSV2SourceClient(s3SourceConfig);
-        final FileOffsetStore offsetStore = new FileOffsetStore(Path.of(config.offsets.file),
-                config.poll.ringBufferSize);
-        final Optional<FileOffsetStore.Offset> offset = offsetStore.load();
-        // 重启后：断点对象从 recordCount 处续读（兜底），已消费对象列表预填去重缓冲
-        final List<String> processedKeys = offset.map(FileOffsetStore.Offset::processedKeys).orElse(List.of());
+        // 临时文件下载目录：为空时交给 AWSV2SourceClient 使用系统临时目录
+        final Path downloadDir = StringUtils.isNotBlank(config.poll.downloadDir)
+                ? Path.of(config.poll.downloadDir)
+                : null;
+        // path-style 按存储服务选择：AWS/腾讯云 COS 用 virtual-hosted-style，MinIO 等本地服务用 path-style
+        final AWSV2SourceClient s3Client = new AWSV2SourceClient(s3SourceConfig, downloadDir,
+                config.s3.pathStyleAccess);
+        // 断点存储按 offsets.type 选择：file=本地 JSON 文件 / mysql=MySQL 表
+        final OffsetStore offsetStore = config.offsets.type().equalsIgnoreCase("mysql")
+                ? MySqlOffsetStore.create(config)
+                : new FileOffsetStore(Path.of(config.offsets.file), config.poll.ringBufferSize);
+        final Optional<OffsetStore.Offset> offset = offsetStore.load();
+        // 重启后：断点对象从 recordCount 处续读（兜底，对象被覆盖时迭代器会忽略该续读从头消费），
+        // 已消费对象 key→eTag 映射预填去重缓冲与 eTag 表
+        final Map<String, String> processedKeys = offset.map(OffsetStore.Offset::processedKeys).orElse(Map.of());
         final S3SourceRecordIterator iterator = new S3SourceRecordIterator(s3SourceConfig,
                 TransformerFactory.getTransformer(config.inputFormat()), s3Client,
                 key -> offset
                         .filter(o -> config.s3.bucket.equals(o.bucket()) && key.equals(o.objectKey()))
-                        .map(FileOffsetStore.Offset::recordCount)
+                        .map(OffsetStore.Offset::recordCount)
                         .orElse(0L),
                 processedKeys);
         final OutputSink sink = config.output.type() == PollerConfig.OutputType.FILE
@@ -124,6 +132,7 @@ public final class S3Poller implements AutoCloseable {
     public long pollOnce() throws IOException {
         long produced = 0;
         String lastKey = null;
+        String lastETag = null;
         long lastRecordCount = 0;
         final long maxRecords = config.poll.maxPollRecords;
         while (iterator.hasNext() && (maxRecords <= 0 || produced < maxRecords)) {
@@ -131,13 +140,15 @@ public final class S3Poller implements AutoCloseable {
             sink.write(record);
             produced++;
             lastKey = record.nativeKey();
+            lastETag = record.nativeETag();
             lastRecordCount = record.recordCount();
         }
         if (produced > 0) {
             // 先确认送达再推进断点：flush 抛错时断点不动，重启后重发本批（at-least-once）
             sink.flush();
-            offsetStore.save(bucket, lastKey, lastRecordCount);
-            LOGGER.info("本轮输出 {} 条记录，断点已保存: {} 的第 {} 条", produced, lastKey, lastRecordCount);
+            offsetStore.save(bucket, lastKey, lastRecordCount, lastETag);
+            LOGGER.info("本轮输出 {} 条记录，断点已保存: {} 的第 {} 条，eTag={}", produced, lastKey, lastRecordCount,
+                    lastETag);
         }
         return produced;
     }
@@ -147,8 +158,8 @@ public final class S3Poller implements AutoCloseable {
      * 无数据或发生异常时休眠 {@code poll.intervalSeconds} 秒后继续。
      */
     public void run() {
-        LOGGER.info("轮询器启动: bucket={}, inputFormat={}, output={}, 断点文件={}", config.s3.bucket,
-                config.parse.inputFormat, config.output.type, config.offsets.file);
+        LOGGER.info("轮询器启动: bucket={}, inputFormat={}, output={}, 断点存储={}", config.s3.bucket,
+                config.parse.inputFormat, config.output.type, config.offsets.type());
         while (!stopped.get()) {
             try {
                 final long produced = pollOnce();

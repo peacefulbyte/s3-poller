@@ -85,6 +85,10 @@ public class PollerConfig {
         } else {
             Objects.requireNonNull(output.file.directory, "output.file.directory 不能为空");
         }
+        if (offsets.type().equalsIgnoreCase("mysql")) {
+            Objects.requireNonNull(offsets.mysql.jdbcUrl, "offsets.mysql.jdbcUrl 不能为空");
+            Objects.requireNonNull(offsets.mysql.username, "offsets.mysql.username 不能为空");
+        }
     }
 
     /**
@@ -119,6 +123,12 @@ public class PollerConfig {
         /** 存储服务地址，如 http://127.0.0.1:9000；为空则使用官方 AWS */
         public String endpoint;
         public String region = "us-east-1";
+        /**
+         * 是否使用 path-style 访问（桶名在 URL 路径中）。
+         * 默认 false=virtual-hosted-style（桶名作为子域名），匹配 AWS / 腾讯云 COS；
+         * MinIO 等本地测试服务无 DNS 解析时设为 true。
+         */
+        public boolean pathStyleAccess = false;
         /** 存储桶名，必填 */
         public String bucket;
         /** 只扫描该前缀下的对象，可为空 */
@@ -152,6 +162,8 @@ public class PollerConfig {
         public int ringBufferSize = 1000;
         /** 单轮轮询最多输出的记录数，达到后先持久化断点再继续；0 表示不限制 */
         public int maxPollRecords = 500;
+        /** 对象下载临时目录；为空使用系统临时目录。配置专用目录时启动会清理其中 s3-poller-*.obj 残留 */
+        public String downloadDir;
     }
 
     /** 解析配置 */
@@ -205,8 +217,28 @@ public class PollerConfig {
 
     /** 断点持久化配置 */
     public static class Offsets {
-        /** 断点文件路径；进程重启后从该文件记录的 key 之后继续扫描 */
+        /** 断点存储类型：file=本地 JSON 文件 / mysql=MySQL 表 */
+        public String type = "file";
+        /** 断点文件路径；type=file 时使用，进程重启后从该文件记录的 key 之后继续扫描 */
         public String file = "./offsets.json";
+        /** type=mysql 时的连接配置 */
+        public MySql mysql = new MySql();
+
+        public String type() {
+            return type == null ? "file" : type.trim();
+        }
+    }
+
+    /** MySQL 断点存储连接配置 */
+    public static class MySql {
+        /** JDBC 连接串，如 jdbc:mysql://127.0.0.1:3306/s3_poller?useSSL=false */
+        public String jdbcUrl;
+        public String username;
+        public String password;
+        /** 断点表名，只允许字母/数字/下划线，默认 s3_offset */
+        public String table = "s3_offset";
+        /** 已消费对象窗口大小；为空则取 poll.ringBufferSize */
+        public Integer maxProcessedKeys;
     }
 
     /** 输出方式枚举 */

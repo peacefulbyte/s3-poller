@@ -110,6 +110,13 @@ public abstract class AbstractSourceRecord<K extends Comparable<K>, N, T extends
     }
 
     /**
+     * Gets the ETag for the native object. Used to detect when a file is overwritten.
+     *
+     * @return The ETag of the native object. May be {@code null}.
+     */
+    abstract public String getNativeETag();
+
+    /**
      * Gets the record count for the native item that this source record is working with.
      *
      * @return The record count for the native item that this source record is working with.
@@ -223,7 +230,7 @@ public abstract class AbstractSourceRecord<K extends Comparable<K>, N, T extends
             logger.debug("Poller Record: {} for Topic: {} , Partition: {}, recordCount: {}", getNativeKey(),
                     getTopic(), getPartition(), getRecordCount());
         }
-        return new PollerRecord(getNativeKey().toString(), getTopic(), getPartition(), keyData, valueData,
-                getRecordCount(), getNativeItemSize());
+        return new PollerRecord(getNativeKey().toString(), getNativeETag(), getTopic(), getPartition(), keyData,
+                valueData, getRecordCount(), getNativeItemSize());
     }
 }

@@ -30,6 +30,17 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 public class S3ClientFactory {
 
     public S3Client createAmazonS3Client(final S3SourceConfig config) {
+        return createAmazonS3Client(config, false);
+    }
+
+    /**
+     * @param config
+     *            源配置。
+     * @param pathStyleAccess
+     *            true=桶名在 URL 路径中（MinIO 等无 DNS 解析的本地服务）；
+     *            false=桶名作为子域名（virtual-hosted-style，AWS / 腾讯云 COS 要求）。
+     */
+    public S3Client createAmazonS3Client(final S3SourceConfig config, final boolean pathStyleAccess) {
 
         final ExponentialDelayWithJitter backoffStrategy = new ExponentialDelayWithJitter(Random::new,
                 Duration.ofMillis(Math.toIntExact(config.getS3RetryBackoffDelayMs())),
@@ -48,12 +59,14 @@ public class S3ClientFactory {
                     .build();
         } else {
             // TODO This is definitely used for testing but not sure if customers use it. customers use it!
+            // 第三方 S3 兼容服务的路径风格要求不同：AWS/腾讯云 COS 必须 virtual-hosted-style（pathStyle=false），
+            // MinIO 等本地服务通常用 path-style（pathStyle=true）
             return S3Client.builder()
                     .overrideConfiguration(clientOverrideConfiguration)
                     .region(config.getAwsS3Region())
                     .credentialsProvider(config.getAwsV2Provider())
                     .endpointOverride(URI.create(config.getAwsS3EndPoint()))
-                    .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
+                    .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(pathStyleAccess).build())
                     .build();
         }
 

@@ -19,6 +19,7 @@ package io.aiven.kafka.connect.common.config;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PushbackInputStream;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Locale;
@@ -43,6 +44,11 @@ public enum CompressionType {
     SNAPPY("snappy", ".snappy", SnappyInputStream::new, SnappyOutputStream::new),
     /** Zstandard compression */
     ZSTD("zstd", ".zst", ZstdInputStream::new, ZstdOutputStream::new);
+
+    /** GZIP 文件头 magic bytes（RFC 1952 固定），用于自动探测 */
+    private static final byte[] GZIP_MAGIC = {0x1F, (byte) 0x8B};
+    /** Zstandard 文件头 magic bytes（RFC 8478 固定），用于自动探测 */
+    private static final byte[] ZSTD_MAGIC = {0x28, (byte) 0xB5, 0x2F, (byte) 0xFD};
 
     /**
      * A list of supported compression types for display.
@@ -137,6 +143,56 @@ public enum CompressionType {
      */
     public final InputStream decompress(final InputStream input) throws IOException {
         return decompressor.apply(input);
+    }
+
+    /**
+     * 自动探测输入流最外层的压缩格式并解压：仅识别 GZIP（1F 8B）与 ZSTD（28 B5 2F FD），
+     * 未命中（明文、其它二进制或文件不足相应 magic 长度）时原样返回。
+     * 探测通过 PushbackInputStream peek 文件头完成：不消费底层流，也不依赖其 mark/reset 能力
+     * （S3 对象流不保证支持 mark/reset）。
+     *
+     * @param input
+     *            the raw input stream.
+     * @return 命中时返回对应解压流，否则返回原输入流。
+     * @throws IOException
+     *             on error.
+     */
+    public static InputStream autoDecompress(final InputStream input) throws IOException {
+        final PushbackInputStream peek = new PushbackInputStream(input, ZSTD_MAGIC.length);
+        final byte[] header = new byte[ZSTD_MAGIC.length];
+        // 底层网络流一次 read 可能返回不足 4 字节，循环读满或读到 EOF
+        int n = 0;
+        while (n < header.length) {
+            final int r = peek.read(header, n, header.length - n);
+            if (r < 0) {
+                break;
+            }
+            n += r;
+        }
+        peek.unread(header, 0, n);
+        if (n >= ZSTD_MAGIC.length && Arrays.equals(ZSTD_MAGIC, header)) {
+            return new ZstdInputStream(peek);
+        }
+        if (n >= GZIP_MAGIC.length && header[0] == GZIP_MAGIC[0] && header[1] == GZIP_MAGIC[1]) {
+            return new GZIPInputStream(peek);
+        }
+        return peek;
+    }
+
+    /**
+     * 自动探测版 IOSupplier 包装：每次获取输入流时执行 {@link #autoDecompress(InputStream)}。
+     *
+     * @param input
+     *            the raw input stream supplier.
+     * @return 包装后的 supplier。
+     */
+    public static IOSupplier<InputStream> autoDecompress(final IOSupplier<InputStream> input) {
+        return new IOSupplier<InputStream>() {
+            @Override
+            public InputStream get() throws IOException {
+                return autoDecompress(input.get());
+            }
+        };
     }
 
     /**

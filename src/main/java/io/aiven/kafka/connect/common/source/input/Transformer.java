@@ -42,7 +42,14 @@ public abstract class Transformer {
         // 解析入口：按具体格式创建 Spliterator 逐条读取；skipRecords 用于从文件中段续读（断点恢复）
         final StreamSpliterator spliterator = createSpliterator(inputStreamIOSupplier, streamLength, context,
                 sourceConfig);
-        return StreamSupport.stream(spliterator, false).onClose(spliterator::close).skip(skipRecords);
+        return StreamSupport.stream(spliterator, false).onClose(() -> {
+            spliterator.close();
+            // 下载/解析失败时关闭后抛出，向上传播而不是静默结束，
+            // 否则失败对象会被外层当作已消费记入去重缓冲，造成数据丢失
+            if (spliterator.hasFailed()) {
+                throw new IllegalStateException("对象流处理失败（下载或解析异常），需重新扫描处理");
+            }
+        }).skip(skipRecords);
     }
 
     /**
@@ -86,6 +93,17 @@ public abstract class Transformer {
          * A flag indicate that the input stream has been closed.
          */
         private boolean closed;
+
+        /**
+         * 输入流打开/读取/解析过程中是否发生过异常。异常在 tryAdvance 中被吞掉以保证迭代器收敛，
+         * 由 {@link Transformer#getRecords} 的 onClose 检查本标志统一抛出，向上传播失败。
+         */
+        private boolean failed;
+
+        /** @return 输入流处理过程中是否发生过异常。 */
+        public final boolean hasFailed() {
+            return failed;
+        }
 
         /**
          * Constructor.
@@ -156,6 +174,7 @@ public abstract class Transformer {
                         inputOpened(inputStream);
                     } catch (IOException e) {
                         logger.error("Error trying to open inputStream: {}", e.getMessage(), e);
+                        failed = true;
                         close();
                         return false;
                     }
@@ -163,6 +182,7 @@ public abstract class Transformer {
                 result = doAdvance(action);
             } catch (RuntimeException e) { // NOPMD must catch runtime exception here.
                 logger.error("Error trying to advance data: {}", e.getMessage(), e);
+                failed = true;
             }
             if (!result) {
                 close();

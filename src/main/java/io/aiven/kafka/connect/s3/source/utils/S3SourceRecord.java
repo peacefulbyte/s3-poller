@@ -50,6 +50,11 @@ public class S3SourceRecord extends AbstractSourceRecord<String, S3Object, S3Sou
     }
 
     @Override
+    public String getNativeETag() {
+        return getNativeItem().eTag();
+    }
+
+    @Override
     public S3SourceRecord duplicate() {
         return new S3SourceRecord(this);
     }
