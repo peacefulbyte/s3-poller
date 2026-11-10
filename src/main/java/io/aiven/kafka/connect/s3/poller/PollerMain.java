@@ -16,10 +16,14 @@
 
 package io.aiven.kafka.connect.s3.poller;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,6 +61,7 @@ public final class PollerMain {
         final Path configFile = Paths.get(args.length > 0 ? args[0] : "poller.yaml");
         LOGGER.info("加载配置: {}", configFile.toAbsolutePath());
         final PollerConfig config = PollerConfig.load(configFile);
+        prepareDownloadDir(config);
         try (final S3Poller poller = S3Poller.create(config)) {
             final Thread mainThread = Thread.currentThread();
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -70,6 +75,42 @@ public final class PollerMain {
                 }
             }, "poller-shutdown"));
             poller.run();
+        }
+    }
+
+    /**
+     * 准备对象下载临时目录：仅当配置了专用目录时创建并清理上次进程崩溃残留的 s3-poller-*.obj；
+     * 未配置（使用系统临时目录）时不做清理，避免误删其他实例正在下载的文件。
+     *
+     * @param config
+     *            已加载的配置。
+     * @throws IOException
+     *             目录创建或清理失败。
+     */
+    private static void prepareDownloadDir(final PollerConfig config) throws IOException {
+        if (StringUtils.isBlank(config.poll.downloadDir)) {
+            return;
+        }
+        final Path downloadDir = Path.of(config.poll.downloadDir);
+        Files.createDirectories(downloadDir);
+        try (Stream<Path> files = Files.list(downloadDir)) {
+            files.filter(PollerMain::isTempObj).forEach(PollerMain::deleteQuietly);
+        }
+    }
+
+    /** 是否为下载临时文件（前缀 s3-poller-，后缀 .obj） */
+    private static boolean isTempObj(final Path p) {
+        final String name = p.getFileName().toString();
+        return name.startsWith("s3-poller-") && name.endsWith(".obj");
+    }
+
+    /** 删除残留临时文件，失败仅告警不中断启动 */
+    private static void deleteQuietly(final Path p) {
+        try {
+            Files.deleteIfExists(p);
+            LOGGER.warn("已清理残留临时文件: {}", p);
+        } catch (final IOException e) {
+            LOGGER.warn("清理残留临时文件失败: {}", p, e);
         }
     }
 }

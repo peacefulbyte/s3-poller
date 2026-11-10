@@ -152,6 +152,8 @@ public class PollerConfig {
         public int ringBufferSize = 1000;
         /** 单轮轮询最多输出的记录数，达到后先持久化断点再继续；0 表示不限制 */
         public int maxPollRecords = 500;
+        /** 对象下载临时目录；为空使用系统临时目录。配置专用目录时启动会清理其中 s3-poller-*.obj 残留 */
+        public String downloadDir;
     }
 
     /** 解析配置 */

@@ -94,7 +94,11 @@ public final class S3Poller implements AutoCloseable {
      */
     public static S3Poller create(final PollerConfig config) {
         final S3SourceConfig s3SourceConfig = new S3SourceConfig(toSourceProps(config));
-        final AWSV2SourceClient s3Client = new AWSV2SourceClient(s3SourceConfig);
+        // 临时文件下载目录：为空时交给 AWSV2SourceClient 使用系统临时目录
+        final Path downloadDir = StringUtils.isNotBlank(config.poll.downloadDir)
+                ? Path.of(config.poll.downloadDir)
+                : null;
+        final AWSV2SourceClient s3Client = new AWSV2SourceClient(s3SourceConfig, downloadDir);
         final FileOffsetStore offsetStore = new FileOffsetStore(Path.of(config.offsets.file),
                 config.poll.ringBufferSize);
         final Optional<FileOffsetStore.Offset> offset = offsetStore.load();

@@ -16,7 +16,12 @@
 
 package io.aiven.kafka.connect.s3.source.utils;
 
+import java.io.FilterInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.function.Predicate;
@@ -27,10 +32,8 @@ import io.aiven.kafka.connect.s3.source.config.S3SourceConfig;
 
 import org.apache.commons.io.function.IOSupplier;
 import org.apache.commons.lang3.StringUtils;
-import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
@@ -43,6 +46,8 @@ public class AWSV2SourceClient {
     private final S3SourceConfig s3SourceConfig;
     private final S3Client s3Client;
     private final String bucketName;
+    /** 对象下载临时目录；null 时使用系统临时目录 */
+    private final Path downloadDir;
 
     private Predicate<S3Object> filterPredicate = s3Object -> s3Object.size() > 0;
 
@@ -51,7 +56,17 @@ public class AWSV2SourceClient {
      *            configuration for Source connector
      */
     public AWSV2SourceClient(final S3SourceConfig s3SourceConfig) {
-        this(new S3ClientFactory().createAmazonS3Client(s3SourceConfig), s3SourceConfig);
+        this(s3SourceConfig, null);
+    }
+
+    /**
+     * @param s3SourceConfig
+     *            configuration for Source connector
+     * @param downloadDir
+     *            对象下载临时目录，null 时使用系统临时目录
+     */
+    public AWSV2SourceClient(final S3SourceConfig s3SourceConfig, final Path downloadDir) {
+        this(new S3ClientFactory().createAmazonS3Client(s3SourceConfig), s3SourceConfig, downloadDir);
     }
 
     /**
@@ -63,9 +78,24 @@ public class AWSV2SourceClient {
      *            configuration for Source connector
      */
     AWSV2SourceClient(final S3Client s3Client, final S3SourceConfig s3SourceConfig) {
+        this(s3Client, s3SourceConfig, null);
+    }
+
+    /**
+     * Valid for testing
+     *
+     * @param s3Client
+     *            amazonS3Client
+     * @param s3SourceConfig
+     *            configuration for Source connector
+     * @param downloadDir
+     *            对象下载临时目录，null 时使用系统临时目录
+     */
+    AWSV2SourceClient(final S3Client s3Client, final S3SourceConfig s3SourceConfig, final Path downloadDir) {
         this.s3SourceConfig = s3SourceConfig;
         this.s3Client = s3Client;
         this.bucketName = s3SourceConfig.getAwsS3BucketName();
+        this.downloadDir = downloadDir;
     }
 
     /**
@@ -112,10 +142,53 @@ public class AWSV2SourceClient {
     }
 
     public IOSupplier<InputStream> getObject(final String objectKey) {
-        // 下载文件：整个对象读入内存，返回惰性的 InputStream 交给解析器逐条消费
-        final GetObjectRequest getObjectRequest = GetObjectRequest.builder().bucket(bucketName).key(objectKey).build();
-        final ResponseBytes<GetObjectResponse> s3ObjectResponse = s3Client.getObjectAsBytes(getObjectRequest);
-        return s3ObjectResponse::asInputStream;
+        // 下载对象：流式下载到本地临时文件，返回惰性的文件流交给解析器逐条消费；
+        // 内存占用 O(缓冲区)，大对象不再整块进入 JVM 堆
+        return () -> {
+            final GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(objectKey)
+                    .build();
+            try (InputStream s3Stream = s3Client.getObject(getObjectRequest)) {
+                return downloadToTempFile(s3Stream, downloadDir);
+            }
+        };
+    }
+
+    /**
+     * 把输入流内容写入本地临时文件，返回读取该文件的流；返回的流关闭时自动删除临时文件。
+     * 供 getObject 与无网络场景的测试复用。
+     *
+     * @param source
+     *            数据源流（由调用方负责关闭）。
+     * @param downloadDir
+     *            临时文件目录，null 时使用系统临时目录。
+     * @return 读取临时文件的流（close 时删除临时文件）。
+     * @throws IOException
+     *             on error.
+     */
+    public static InputStream downloadToTempFile(final InputStream source, final Path downloadDir)
+            throws IOException {
+        final Path tmp = Files.createTempFile(downloadDir, "s3-poller-", ".obj");
+        try {
+            Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING);
+            final InputStream fileIn = Files.newInputStream(tmp);
+            return new FilterInputStream(fileIn) {
+                @Override
+                public void close() throws IOException {
+                    // 先关闭底层文件流释放句柄（Windows 下打开中的文件无法删除），再删除临时文件
+                    super.close();
+                    Files.deleteIfExists(tmp);
+                }
+            };
+        } catch (final IOException | RuntimeException e) {
+            try {
+                Files.deleteIfExists(tmp);
+            } catch (final IOException ignored) {
+                // 清理失败不影响原始异常
+            }
+            throw e;
+        }
     }
 
     public void shutdown() {
