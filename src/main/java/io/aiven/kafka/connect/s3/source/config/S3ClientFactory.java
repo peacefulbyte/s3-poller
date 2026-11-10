@@ -23,6 +23,7 @@ import java.util.Random;
 
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.core.retry.RetryMode;
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.retries.api.internal.backoff.ExponentialDelayWithJitter;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
@@ -51,6 +52,7 @@ public class S3ClientFactory {
                 .build();
         if (Objects.isNull(config.getAwsS3EndPoint())) {
             return S3Client.builder()
+                    .httpClientBuilder(UrlConnectionHttpClient.builder())
                     .overrideConfiguration(clientOverrideConfiguration)
                     .overrideConfiguration(o -> o.retryStrategy(
                             r -> r.backoffStrategy(backoffStrategy).maxAttempts(config.getS3RetryBackoffMaxRetries())))
@@ -62,6 +64,7 @@ public class S3ClientFactory {
             // 第三方 S3 兼容服务的路径风格要求不同：AWS/腾讯云 COS 必须 virtual-hosted-style（pathStyle=false），
             // MinIO 等本地服务通常用 path-style（pathStyle=true）
             return S3Client.builder()
+                    .httpClientBuilder(UrlConnectionHttpClient.builder())
                     .overrideConfiguration(clientOverrideConfiguration)
                     .region(config.getAwsS3Region())
                     .credentialsProvider(config.getAwsV2Provider())
