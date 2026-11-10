@@ -24,6 +24,7 @@ poll:
   # 文件名过滤模板，如 {{topic}}-{{partition}}-{{start_offset}}；为空则匹配所有对象
   filePattern: ""
   # 对象外层压缩：none / gzip / snappy / zstd
+  # none=自动探测对象流文件头（gzip/zstd 命中才解压，否则按非压缩读取）
   compressionType: none
   # 从该 key 开始消费；为空则从断点或桶首开始
   nativeStartKey: ""

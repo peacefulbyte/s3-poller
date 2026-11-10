@@ -242,10 +242,13 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
         final CompressionType compressionType = transformer instanceof ParquetTransformer
                 ? CompressionType.NONE
                 : sourceConfig.getCompressionType();
-        // create an IOSupplier with the specified compression
+        // create an IOSupplier with the specified compression;
+        // NONE 模式下自动探测对象流 magic bytes（gzip/zstd），命中才解压，否则按非压缩读取
         final IOSupplier<InputStream> inputStream = transformer instanceof ParquetTransformer
                 ? getInputStream(sourceRecord)
-                : compressionType.decompress(getInputStream(sourceRecord));
+                : compressionType == CompressionType.NONE
+                        ? CompressionType.autoDecompress(getInputStream(sourceRecord))
+                        : compressionType.decompress(getInputStream(sourceRecord));
         return transformer
                 .getRecords(inputStream, sourceRecord.getNativeItemSize(), sourceRecord.getContext(), sourceConfig,
                         sourceRecord.getRecordCount())
