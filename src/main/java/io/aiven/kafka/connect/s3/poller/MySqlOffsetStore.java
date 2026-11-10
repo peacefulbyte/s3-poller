@@ -48,7 +48,8 @@ import org.slf4j.LoggerFactory;
  * </ul>
  *
  * <p>
- * {@link #save} 的四步（降级旧断点、删旧行、插新行、裁剪窗口）在单事务内完成，
+ * {@link #save} 同一对象内推进断点时单条 UPDATE 原地更新 record_count/eTag；
+ * 换对象或首次保存时四步（降级旧断点、删旧行、插新行、裁剪窗口）在单事务内完成，
  * 对应文件版的「临时文件 + 原子移动」。
  *
  * <p>
@@ -153,13 +154,37 @@ public final class MySqlOffsetStore implements OffsetStore {
     }
 
     /**
-     * 保存断点。四步单事务：降级旧断点 → 删除同 key 旧行 → 插入新断点行 → 裁剪窗口。
+     * 保存断点。
+     *
+     * <p>
+     * 同一对象推进时（当前断点行即该 key）：单条 UPDATE 原地更新 record_count/eTag，
+     * 行保持在窗口尾部；换对象或首次保存时走四步单事务：
+     * 降级旧断点 → 删除同 key 旧行 → 插入新断点行 → 裁剪窗口。
      */
     @Override
     public void save(final String bucket, final String objectKey, final long recordCount, final String eTag) {
         try (Connection conn = connect()) {
             conn.setAutoCommit(false);
             try {
+                // 同一对象推进断点：当前行就是该 key，原地更新即可，避免删插行放大写
+                if (exec(conn,
+                        "UPDATE `" + table
+                                + "` SET record_count = ?, e_tag = ?, consumed_at = CURRENT_TIMESTAMP(3) "
+                                + "WHERE bucket = ? AND is_current = 1 AND key_hash = ?",
+                        stmt -> {
+                            stmt.setLong(1, recordCount);
+                            if (eTag != null) {
+                                stmt.setString(2, eTag);
+                            } else {
+                                stmt.setNull(2, Types.VARCHAR);
+                            }
+                            stmt.setString(3, bucket);
+                            stmt.setString(4, sha256Hex(objectKey));
+                        }) > 0) {
+                    conn.commit();
+                    return;
+                }
+                // 换对象或首次保存：完整路径
                 // 1. 旧断点降级（每桶最多一行 is_current=1）
                 exec(conn, "UPDATE `" + table + "` SET is_current = 0 WHERE bucket = ? AND is_current = 1",
                         stmt -> stmt.setString(1, bucket));
@@ -218,7 +243,7 @@ public final class MySqlOffsetStore implements OffsetStore {
                 + "  e_tag VARCHAR(255) NULL COMMENT '消费时的 eTag；NULL=旧断点无 eTag 信息',\n"
                 + "  record_count BIGINT NOT NULL DEFAULT 0 COMMENT '对象内已消费记录数（仅断点对象有意义）',\n"
                 + "  is_current TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=最近断点对象，每桶最多一行',\n"
-                + "  consumed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '消费完成时间',\n"
+                + "  consumed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '最后确认时间',\n"
                 + "  PRIMARY KEY (id),\n"
                 + "  UNIQUE KEY uk_bucket_key_hash (bucket, key_hash),\n"
                 + "  KEY idx_bucket_current (bucket, is_current)\n"
@@ -249,11 +274,11 @@ public final class MySqlOffsetStore implements OffsetStore {
         }
     }
 
-    /** 执行更新/删除/插入 */
-    private void exec(final Connection conn, final String sql, final StmtSetter setter) throws SQLException {
+    /** 执行更新/删除/插入，返回受影响行数 */
+    private int exec(final Connection conn, final String sql, final StmtSetter setter) throws SQLException {
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             setter.apply(stmt);
-            stmt.executeUpdate();
+            return stmt.executeUpdate();
         }
     }
 
