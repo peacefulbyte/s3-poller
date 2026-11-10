@@ -17,7 +17,7 @@
 package io.aiven.kafka.connect.s3.source.utils;
 
 import java.io.InputStream;
-import java.util.Collection;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -56,12 +56,12 @@ public final class S3SourceRecordIterator
      * @param initialRecordCounts
      *            查询对象已处理记录数的函数，用于断点续读。
      * @param initialProcessedKeys
-     *            已处理的对象 key 列表，预填去重缓冲。
+     *            已处理的对象 key→eTag 映射，预填去重缓冲与 eTag 表。
      */
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "source client has stores mutable fields")
     public S3SourceRecordIterator(final S3SourceConfig s3SourceConfig, final Transformer transformer,
             final AWSV2SourceClient sourceClient, final Function<String, Long> initialRecordCounts,
-            final Collection<String> initialProcessedKeys) {
+            final Map<String, String> initialProcessedKeys) {
 
         super(s3SourceConfig, transformer, s3SourceConfig.getRingBufferSize(), initialRecordCounts,
                 initialProcessedKeys);
@@ -81,13 +81,19 @@ public final class S3SourceRecordIterator
 
     @Override
     protected IOSupplier<InputStream> getInputStream(final S3SourceRecord sourceRecord) {
-        // 第二步：按对象 key 下载文件内容
-        return sourceClient.getObject(sourceRecord.getNativeKey());
+        // 第二步：按对象 key 下载文件内容；扫描时 eTag 作为 IfMatch 前置条件，
+        // 下载瞬间文件被覆盖时服务端返回 412，避免按旧断点续读跳过新内容造成数据丢失
+        return sourceClient.getObject(sourceRecord.getNativeKey(), sourceRecord.getNativeETag());
     }
 
     @Override
     protected String getNativeKey(final S3Object nativeObject) {
         return nativeObject.key();
+    }
+
+    @Override
+    protected String getNativeETag(final S3Object nativeObject) {
+        return nativeObject.eTag();
     }
 
     @Override

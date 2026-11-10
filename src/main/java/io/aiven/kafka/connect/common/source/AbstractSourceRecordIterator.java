@@ -17,10 +17,11 @@
 package io.aiven.kafka.connect.common.source;
 
 import java.io.InputStream;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -91,12 +92,20 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
      * other native items that come before this key.
      */
     private K lastSeenNativeKey;
+    /** 当前正在处理的对象的 eTag，对象消费完毕后与 key 一起记入 eTag 表 */
+    private String lastSeenNativeETag;
     /**
      * The ring buffer which contains recently processed native item keys, this is used during a restart to skip keys
      * that are known to have been processed while still accounting for the possibility that slower writing to storage
      * may have introduced newer keys.
      */
     private final RingBuffer<K> ringBuffer;
+
+    /**
+     * 已处理对象的 key→eTag 映射，与环形缓冲中的 key 一一对应（eTag 可能为 null）。
+     * 扫描时用 key + eTag 联合判断：key 在缓冲中但 eTag 不同（文件被覆盖）时重新消费。
+     */
+    private final Map<K, String> processedETags = new ConcurrentHashMap<>();
 
     private final K nativeStartKey;
 
@@ -112,11 +121,12 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
      * @param initialRecordCounts
      *            function to query the number of records already extracted for a native item.
      * @param initialProcessedKeys
-     *            已处理的对象 key 列表（如从断点文件加载），构造时预填环形缓冲以跳过重复消费。
+     *            已处理的对象 key→eTag 映射（如从断点文件加载），构造时预填环形缓冲与 eTag 表以跳过重复消费；
+     *            值为 null 表示旧断点无 eTag 信息，仅预填环形缓冲。
      */
     public AbstractSourceRecordIterator(final SourceCommonConfig sourceConfig, final Transformer transformer,
             final int ringBufferSize, final Function<K, Long> initialRecordCounts,
-            final Collection<K> initialProcessedKeys) {
+            final Map<K, String> initialProcessedKeys) {
         super();
 
         final DistributionType distributionType = sourceConfig.getDistributionType();
@@ -134,9 +144,14 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
         this.inner = Collections.emptyIterator();
         this.outer = Collections.emptyIterator();
         this.ringBuffer = new RingBuffer<>(Math.max(1, ringBufferSize));
-        // 预填已处理 key：重启后扫描时直接跳过，避免重复消费
+        // 预填已处理 key：重启后扫描时直接跳过，避免重复消费；有 eTag 的同步存入 eTag 表
         if (initialProcessedKeys != null) {
-            initialProcessedKeys.forEach(ringBuffer::add);
+            initialProcessedKeys.forEach((key, eTag) -> {
+                ringBuffer.add(key);
+                if (eTag != null) {
+                    processedETags.put(key, eTag);
+                }
+            });
         }
     }
 
@@ -183,6 +198,15 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
     abstract protected K getNativeKey(N nativeObject);
 
     /**
+     * Gets the ETag for the native object. Used to detect when a file has been overwritten.
+     *
+     * @param nativeObject
+     *            the native object to retrieve the ETag for.
+     * @return The ETag of the native object. May be {@code null}.
+     */
+    abstract protected String getNativeETag(N nativeObject);
+
+    /**
      * Gets the AbstractSourceRecord implementation for the native object.
      *
      * @param nativeObject
@@ -193,10 +217,29 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
 
     @Override
     final public boolean hasNext() {
-        if (!outer.hasNext() && lastSeenNativeKey != null) {
-            // 上一个对象的记录已全部产出：记入环形缓冲用于去重；断点持久化由轮询器拿到记录后完成
+        final boolean outerHasNext;
+        try {
+            outerHasNext = outer.hasNext();
+        } catch (final RuntimeException e) {
+            // 对象下载/解析失败（如 IfMatch 412、网络抖动）：丢弃当前对象状态（不记入去重缓冲），
+            // 向上抛出让轮询器本轮失败；下轮重新扫描会再次遇到该对象并重新下载，避免数据丢失
+            outer = Collections.emptyIterator();
+            lastSeenNativeKey = null;
+            lastSeenNativeETag = null;
+            throw e;
+        }
+        if (!outerHasNext && lastSeenNativeKey != null) {
+            // 上一个对象的记录已全部产出：key 与 eTag 同时记入去重缓冲/表，并清理被挤出 key 的 eTag；
+            // eTag 必须在此刻（而非放行时）更新，否则消费失败会导致该 key 在下轮扫描被永久跳过；
+            // 断点持久化由轮询器拿到记录后完成
             // update the buffer to contain this new objectKey
-            ringBuffer.add(lastSeenNativeKey);
+            final K ejected = ringBuffer.add(lastSeenNativeKey);
+            if (ejected != null) {
+                processedETags.remove(ejected);
+            }
+            if (lastSeenNativeETag != null) {
+                processedETags.put(lastSeenNativeKey, lastSeenNativeETag);
+            }
         }
         if (!inner.hasNext() && !outer.hasNext()) {
             // 当前批次已读完，重新扫描存储桶；起点优先取环形缓冲中最后处理过的 key
@@ -231,11 +274,12 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
      */
     @VisibleForTesting
     Stream<T> convert(final T sourceRecord) {
-        // 第三步：解析。先生成记录 key 并记下当前对象，供下一轮扫描定位起点
+        // 第三步：解析。先生成记录 key 并记下当前对象及其 eTag，供下一轮扫描定位起点与 eTag 去重
         sourceRecord
                 .setKeyData(transformer.getKeyData(sourceRecord.getNativeKey(), sourceRecord.getTopic(), sourceConfig));
 
         lastSeenNativeKey = sourceRecord.getNativeKey();
+        lastSeenNativeETag = sourceRecord.getNativeETag();
 
         // 先按 file.compression.type 解压（Parquet 自带压缩，跳过外层解压），再交给 Transformer 逐条解析
         // parquet handles compression internally.
@@ -339,16 +383,23 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
         public Optional<T> apply(final N nativeItem) {
             final K itemName = getNativeKey(nativeItem);
             final Optional<Context<K>> optionalContext = utils.process(itemName);
-            if (optionalContext.isPresent() && !ringBuffer.contains(itemName)) {
-                final T sourceRecord = createSourceRecord(nativeItem);
-                final Context<K> context = optionalContext.get();
-                overrideContextTopic(context);
-                sourceRecord.setContext(context);
-                // 断点续读：查询该对象已处理的记录数，解析时跳过
-                sourceRecord.setRecordCount(initialRecordCounts.apply(itemName));
-                return Optional.of(sourceRecord);
+            if (!optionalContext.isPresent()) {
+                return Optional.empty();
             }
-            return Optional.empty();
+            // 去重判断：key 不在环形缓冲中，或已记录 eTag 与当前 eTag 不同（文件被覆盖）→ 重新消费
+            final boolean processed = ringBuffer.contains(itemName);
+            final String recordedETag = processedETags.get(itemName);
+            final boolean overwritten = recordedETag != null && !recordedETag.equals(getNativeETag(nativeItem));
+            if (processed && !overwritten) {
+                return Optional.empty();
+            }
+            final T sourceRecord = createSourceRecord(nativeItem);
+            final Context<K> context = optionalContext.get();
+            overrideContextTopic(context);
+            sourceRecord.setContext(context);
+            // 断点续读：查询该对象已处理的记录数，解析时跳过；文件被覆盖时从头消费，旧 recordCount 失效
+            sourceRecord.setRecordCount(overwritten ? 0L : initialRecordCounts.apply(itemName));
+            return Optional.of(sourceRecord);
         }
 
         /**

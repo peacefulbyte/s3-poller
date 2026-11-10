@@ -24,7 +24,8 @@ import org.apache.kafka.connect.data.SchemaAndValue;
  * <p>
  * 由 {@link AbstractSourceRecord#toPollerRecord()} 生成，携带一条已解析记录的全部信息：
  * 所属 S3 对象（nativeKey）、目标 topic/partition（可选）、解析出的 key/value 以及
- * 对象内的记录序号（recordCount，用于断点续读）。输出层（file / kafka）只消费本类型，
+ * 对象内的记录序号（recordCount，用于断点续读）与对象的 eTag（用于检测文件覆盖）。
+ * 输出层（file / kafka）只消费本类型，
  * 不再感知 Kafka Connect 的 SourceRecord 概念。
  *
  * <p>
@@ -34,6 +35,8 @@ public final class PollerRecord {
 
     /** 所属 S3 对象的 key，用作断点与日志标识 */
     private final String nativeKey;
+    /** 所属 S3 对象的 eTag，断点持久化时记录，用于检测文件被覆盖 */
+    private final String nativeETag;
     /** 目标 topic；未设置时为 {@code null} */
     private final String topic;
     /** 目标分区；未设置时为 {@code null} */
@@ -52,6 +55,8 @@ public final class PollerRecord {
      *
      * @param nativeKey
      *            所属 S3 对象的 key。
+     * @param nativeETag
+     *            所属 S3 对象的 eTag，可为 {@code null}。
      * @param topic
      *            目标 topic，可为 {@code null}。
      * @param partition
@@ -65,10 +70,11 @@ public final class PollerRecord {
      * @param nativeItemSize
      *            所属对象字节大小。
      */
-    public PollerRecord(final String nativeKey, final String topic, final Integer partition,
-            final SchemaAndValue keyData, final SchemaAndValue valueData, final long recordCount,
-            final long nativeItemSize) {
+    public PollerRecord(final String nativeKey, final String nativeETag, final String topic,
+            final Integer partition, final SchemaAndValue keyData, final SchemaAndValue valueData,
+            final long recordCount, final long nativeItemSize) {
         this.nativeKey = nativeKey;
+        this.nativeETag = nativeETag;
         this.topic = topic;
         this.partition = partition;
         this.keyData = keyData;
@@ -80,6 +86,11 @@ public final class PollerRecord {
     /** @return 所属 S3 对象的 key。 */
     public String nativeKey() {
         return nativeKey;
+    }
+
+    /** @return 所属 S3 对象的 eTag，用于检测文件覆盖；可为 {@code null}。 */
+    public String nativeETag() {
+        return nativeETag;
     }
 
     /** @return 目标 topic，未设置时为 {@code null}。 */

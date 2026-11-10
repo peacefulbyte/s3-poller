@@ -19,7 +19,6 @@ package io.aiven.kafka.connect.s3.poller;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -53,8 +52,8 @@ import org.slf4j.LoggerFactory;
  * <ul>
  * <li>每轮轮询结束时先 {@link OutputSink#flush()} 确认送达，成功才推进断点；
  * Kafka 发送失败时 flush 抛 IOException，断点不推进，重启后整批重发</li>
- * <li>断点文件同时维护最近已消费对象 key 列表，重启后预填迭代器的去重缓冲，
- * 扫描时跳过这些对象避免重复消费</li>
+ * <li>断点文件同时维护最近已消费对象的 key→eTag 映射，重启后预填迭代器的去重缓冲
+ * 与 eTag 表：key 相同但 eTag 不同（文件被覆盖）的对象会重新消费</li>
  * <li>单轮输出条数受 {@code poll.maxPollRecords} 限制，防止持续有新对象时
  * 断点长时间得不到持久化</li>
  * </ul>
@@ -102,8 +101,9 @@ public final class S3Poller implements AutoCloseable {
         final FileOffsetStore offsetStore = new FileOffsetStore(Path.of(config.offsets.file),
                 config.poll.ringBufferSize);
         final Optional<FileOffsetStore.Offset> offset = offsetStore.load();
-        // 重启后：断点对象从 recordCount 处续读（兜底），已消费对象列表预填去重缓冲
-        final List<String> processedKeys = offset.map(FileOffsetStore.Offset::processedKeys).orElse(List.of());
+        // 重启后：断点对象从 recordCount 处续读（兜底，对象被覆盖时迭代器会忽略该续读从头消费），
+        // 已消费对象 key→eTag 映射预填去重缓冲与 eTag 表
+        final Map<String, String> processedKeys = offset.map(FileOffsetStore.Offset::processedKeys).orElse(Map.of());
         final S3SourceRecordIterator iterator = new S3SourceRecordIterator(s3SourceConfig,
                 TransformerFactory.getTransformer(config.inputFormat()), s3Client,
                 key -> offset
@@ -128,6 +128,7 @@ public final class S3Poller implements AutoCloseable {
     public long pollOnce() throws IOException {
         long produced = 0;
         String lastKey = null;
+        String lastETag = null;
         long lastRecordCount = 0;
         final long maxRecords = config.poll.maxPollRecords;
         while (iterator.hasNext() && (maxRecords <= 0 || produced < maxRecords)) {
@@ -135,13 +136,15 @@ public final class S3Poller implements AutoCloseable {
             sink.write(record);
             produced++;
             lastKey = record.nativeKey();
+            lastETag = record.nativeETag();
             lastRecordCount = record.recordCount();
         }
         if (produced > 0) {
             // 先确认送达再推进断点：flush 抛错时断点不动，重启后重发本批（at-least-once）
             sink.flush();
-            offsetStore.save(bucket, lastKey, lastRecordCount);
-            LOGGER.info("本轮输出 {} 条记录，断点已保存: {} 的第 {} 条", produced, lastKey, lastRecordCount);
+            offsetStore.save(bucket, lastKey, lastRecordCount, lastETag);
+            LOGGER.info("本轮输出 {} 条记录，断点已保存: {} 的第 {} 条，eTag={}", produced, lastKey, lastRecordCount,
+                    lastETag);
         }
         return produced;
     }

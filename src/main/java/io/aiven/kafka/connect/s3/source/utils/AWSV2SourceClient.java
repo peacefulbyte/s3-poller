@@ -141,15 +141,27 @@ public class AWSV2SourceClient {
         return getS3ObjectStream(startToken).map(S3Object::key).iterator();
     }
 
-    public IOSupplier<InputStream> getObject(final String objectKey) {
-        // 下载对象：流式下载到本地临时文件，返回惰性的文件流交给解析器逐条消费；
-        // 内存占用 O(缓冲区)，大对象不再整块进入 JVM 堆
+    /**
+     * 下载对象：流式下载到本地临时文件，返回惰性的文件流交给解析器逐条消费；
+     * 内存占用 O(缓冲区)，大对象不再整块进入 JVM 堆。
+     *
+     * @param objectKey
+     *            对象 key。
+     * @param expectedETag
+     *            扫描（listObjects）时拿到的 eTag，作为 IfMatch 前置条件；为 {@code null} 时不校验。
+     *            扫描到下载之间文件被覆盖时服务端返回 412 使下载失败，
+     *            避免按旧断点续读跳过新内容造成数据丢失，下轮扫描会按新 eTag 从头消费。
+     * @return 惰性文件流。
+     */
+    public IOSupplier<InputStream> getObject(final String objectKey, final String expectedETag) {
         return () -> {
-            final GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+            final GetObjectRequest.Builder requestBuilder = GetObjectRequest.builder()
                     .bucket(bucketName)
-                    .key(objectKey)
-                    .build();
-            try (InputStream s3Stream = s3Client.getObject(getObjectRequest)) {
+                    .key(objectKey);
+            if (expectedETag != null) {
+                requestBuilder.ifMatch(expectedETag);
+            }
+            try (InputStream s3Stream = s3Client.getObject(requestBuilder.build())) {
                 return downloadToTempFile(s3Stream, downloadDir);
             }
         };
