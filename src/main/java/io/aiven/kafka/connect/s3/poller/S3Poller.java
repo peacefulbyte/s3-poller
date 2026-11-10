@@ -66,14 +66,14 @@ public final class S3Poller implements AutoCloseable {
     static final String MATCH_ALL_PATTERN = ".*";
 
     private final PollerConfig config;
-    private final FileOffsetStore offsetStore;
+    private final OffsetStore offsetStore;
     private final OutputSink sink;
     private final S3SourceRecordIterator iterator;
     private final AWSV2SourceClient s3Client;
     private final String bucket;
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
-    private S3Poller(final PollerConfig config, final FileOffsetStore offsetStore, final OutputSink sink,
+    private S3Poller(final PollerConfig config, final OffsetStore offsetStore, final OutputSink sink,
             final S3SourceRecordIterator iterator, final AWSV2SourceClient s3Client, final String bucket) {
         this.config = config;
         this.offsetStore = offsetStore;
@@ -100,17 +100,19 @@ public final class S3Poller implements AutoCloseable {
         // path-style 按存储服务选择：AWS/腾讯云 COS 用 virtual-hosted-style，MinIO 等本地服务用 path-style
         final AWSV2SourceClient s3Client = new AWSV2SourceClient(s3SourceConfig, downloadDir,
                 config.s3.pathStyleAccess);
-        final FileOffsetStore offsetStore = new FileOffsetStore(Path.of(config.offsets.file),
-                config.poll.ringBufferSize);
-        final Optional<FileOffsetStore.Offset> offset = offsetStore.load();
+        // 断点存储按 offsets.type 选择：file=本地 JSON 文件 / mysql=MySQL 表
+        final OffsetStore offsetStore = config.offsets.type().equalsIgnoreCase("mysql")
+                ? MySqlOffsetStore.create(config)
+                : new FileOffsetStore(Path.of(config.offsets.file), config.poll.ringBufferSize);
+        final Optional<OffsetStore.Offset> offset = offsetStore.load();
         // 重启后：断点对象从 recordCount 处续读（兜底，对象被覆盖时迭代器会忽略该续读从头消费），
         // 已消费对象 key→eTag 映射预填去重缓冲与 eTag 表
-        final Map<String, String> processedKeys = offset.map(FileOffsetStore.Offset::processedKeys).orElse(Map.of());
+        final Map<String, String> processedKeys = offset.map(OffsetStore.Offset::processedKeys).orElse(Map.of());
         final S3SourceRecordIterator iterator = new S3SourceRecordIterator(s3SourceConfig,
                 TransformerFactory.getTransformer(config.inputFormat()), s3Client,
                 key -> offset
                         .filter(o -> config.s3.bucket.equals(o.bucket()) && key.equals(o.objectKey()))
-                        .map(FileOffsetStore.Offset::recordCount)
+                        .map(OffsetStore.Offset::recordCount)
                         .orElse(0L),
                 processedKeys);
         final OutputSink sink = config.output.type() == PollerConfig.OutputType.FILE
@@ -156,8 +158,8 @@ public final class S3Poller implements AutoCloseable {
      * 无数据或发生异常时休眠 {@code poll.intervalSeconds} 秒后继续。
      */
     public void run() {
-        LOGGER.info("轮询器启动: bucket={}, inputFormat={}, output={}, 断点文件={}", config.s3.bucket,
-                config.parse.inputFormat, config.output.type, config.offsets.file);
+        LOGGER.info("轮询器启动: bucket={}, inputFormat={}, output={}, 断点存储={}", config.s3.bucket,
+                config.parse.inputFormat, config.output.type, config.offsets.type());
         while (!stopped.get()) {
             try {
                 final long produced = pollOnce();

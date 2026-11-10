@@ -85,6 +85,10 @@ public class PollerConfig {
         } else {
             Objects.requireNonNull(output.file.directory, "output.file.directory 不能为空");
         }
+        if (offsets.type().equalsIgnoreCase("mysql")) {
+            Objects.requireNonNull(offsets.mysql.jdbcUrl, "offsets.mysql.jdbcUrl 不能为空");
+            Objects.requireNonNull(offsets.mysql.username, "offsets.mysql.username 不能为空");
+        }
     }
 
     /**
@@ -213,8 +217,28 @@ public class PollerConfig {
 
     /** 断点持久化配置 */
     public static class Offsets {
-        /** 断点文件路径；进程重启后从该文件记录的 key 之后继续扫描 */
+        /** 断点存储类型：file=本地 JSON 文件 / mysql=MySQL 表 */
+        public String type = "file";
+        /** 断点文件路径；type=file 时使用，进程重启后从该文件记录的 key 之后继续扫描 */
         public String file = "./offsets.json";
+        /** type=mysql 时的连接配置 */
+        public MySql mysql = new MySql();
+
+        public String type() {
+            return type == null ? "file" : type.trim();
+        }
+    }
+
+    /** MySQL 断点存储连接配置 */
+    public static class MySql {
+        /** JDBC 连接串，如 jdbc:mysql://127.0.0.1:3306/s3_poller?useSSL=false */
+        public String jdbcUrl;
+        public String username;
+        public String password;
+        /** 断点表名，只允许字母/数字/下划线，默认 s3_offset */
+        public String table = "s3_offset";
+        /** 已消费对象窗口大小；为空则取 poll.ringBufferSize */
+        public Integer maxProcessedKeys;
     }
 
     /** 输出方式枚举 */

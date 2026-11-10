@@ -63,6 +63,18 @@ output:
       password: ""
 
 offsets:
-  # 断点文件；进程重启后从该文件记录的 key 之后继续扫描，
+  # 断点存储类型：file=本地 JSON 文件 / mysql=MySQL 8.0 表
+  type: file
+  # type=file 时使用；进程重启后从该文件记录的 key 之后继续扫描，
   # 同时用其中的已消费对象列表预填去重缓冲
   file: ./offsets.json
+  # type=mysql 时使用（下表字段按需替换）
+  mysql:
+    # JDBC 连接串，如 jdbc:mysql://127.0.0.1:3306/s3_poller?useSSL=false
+    jdbcUrl: ""
+    username: ""
+    password: ""
+    # 断点表名，只允许字母/数字/下划线，启动时自动创建
+    table: s3_offset
+    # 已消费对象窗口大小；为空则取 poll.ringBufferSize
+    maxProcessedKeys: 1000

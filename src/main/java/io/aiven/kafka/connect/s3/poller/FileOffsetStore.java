@@ -21,7 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -33,7 +32,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 基于本地 JSON 文件的断点存储，替代 Kafka Connect 的 offset storage。
+ * 基于本地 JSON 文件的断点存储实现，替代 Kafka Connect 的 offset storage。
  *
  * <p>
  * 保存最近一个<b>已完整消费</b>的 S3 对象：bucket / objectKey / recordCount，
@@ -48,7 +47,7 @@ import org.slf4j.LoggerFactory;
  * <p>
  * 线程安全：读写都由内部锁保护；轮询器单线程顺序消费时不会发生竞争。
  */
-public final class FileOffsetStore {
+public final class FileOffsetStore implements OffsetStore {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(FileOffsetStore.class);
 
@@ -89,6 +88,7 @@ public final class FileOffsetStore {
      *
      * @return 最近一次完整消费的偏移；没有则 {@code Optional.empty()}。
      */
+    @Override
     public Optional<Offset> load() {
         if (!Files.exists(file)) {
             LOGGER.info("偏移文件不存在，将从桶首开始消费: {}", file);
@@ -130,6 +130,7 @@ public final class FileOffsetStore {
      * @throws IllegalStateException
      *             写入失败时抛出，调用方应视为致命错误（断点不准会导致重复消费）。
      */
+    @Override
     public void save(final String bucket, final String objectKey, final long recordCount, final String eTag) {
         synchronized (lock) {
             // 维护已消费 key→eTag 映射：去重后追加到尾部，超出上限裁剪最旧的
@@ -150,44 +151,6 @@ public final class FileOffsetStore {
             } catch (final IOException e) {
                 throw new IllegalStateException("保存偏移文件失败: " + file, e);
             }
-        }
-    }
-
-    /**
-     * 一条断点记录：最近完整消费的 S3 对象及其内部已处理记录数。
-     */
-    public static final class Offset {
-        private final String bucket;
-        private final String objectKey;
-        private final long recordCount;
-        private final Map<String, String> processedKeys;
-
-        public Offset(final String bucket, final String objectKey, final long recordCount,
-                final Map<String, String> processedKeys) {
-            this.bucket = bucket;
-            this.objectKey = objectKey;
-            this.recordCount = recordCount;
-            this.processedKeys = Collections.unmodifiableMap(processedKeys);
-        }
-
-        /** 已完整消费的对象所在存储桶 */
-        public String bucket() {
-            return bucket;
-        }
-
-        /** 已完整消费的对象 key，重启后从此 key 之后继续扫描 */
-        public String objectKey() {
-            return objectKey;
-        }
-
-        /** 该对象内已处理的记录数（预留用于对象内部断点续读） */
-        public long recordCount() {
-            return recordCount;
-        }
-
-        /** 最近已完整消费的对象 key→eTag 映射，尾部为最新；重启后用于预填去重缓冲与 eTag 表 */
-        public Map<String, String> processedKeys() {
-            return processedKeys;
         }
     }
 }
