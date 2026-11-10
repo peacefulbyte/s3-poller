@@ -38,7 +38,6 @@ import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.compress.utils.IOUtils;
 import org.apache.commons.io.function.IOSupplier;
 import org.apache.parquet.avro.AvroParquetReader;
-import org.apache.parquet.conf.PlainParquetConfiguration;
 import org.apache.parquet.hadoop.ParquetReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,13 +55,13 @@ public class ParquetTransformer extends Transformer {
 
     @Override
     public SchemaAndValue getKeyData(final Object cloudStorageKey, final String topic,
-            final SourceCommonConfig sourceConfig) {
+                                     final SourceCommonConfig sourceConfig) {
         return new SchemaAndValue(null, ((String) cloudStorageKey).getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
     public StreamSpliterator createSpliterator(final IOSupplier<InputStream> inputStreamIOSupplier,
-            final long streamLength, final Context<?> context, final SourceCommonConfig sourceConfig) {
+                                               final long streamLength, final Context<?> context, final SourceCommonConfig sourceConfig) {
 
         return new StreamSpliterator(LOGGER, inputStreamIOSupplier) {
 
@@ -85,11 +84,7 @@ public class ParquetTransformer extends Transformer {
                 try (OutputStream outputStream = Files.newOutputStream(parquetFile.toPath())) {
                     IOUtils.copy(input, outputStream); // Copy input stream to temporary file
                 }
-                // 显式传入 PlainParquetConfiguration：单参重载会默认构造 HadoopParquetConfiguration（触碰
-                // hadoop 的 Configuration 类），双参重载在 LocalInputFile 分支完全不引用 hadoop，
-                // fat jar 无需打包 hadoop-client-api/runtime
-                reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(parquetFile.toPath()),
-                        new PlainParquetConfiguration()).build();
+                reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(parquetFile.toPath())).build();
 
             }
 

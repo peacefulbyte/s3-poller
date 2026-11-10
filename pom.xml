@@ -1,5 +1,5 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.aiven</groupId>
   <artifactId>s3-poller</artifactId>
@@ -55,42 +55,22 @@
 
   <dependencies>
     <!-- ========== AWS SDK v2 ========== -->
-    <!-- S3Client / S3Configuration / model / BucketUtils；
-         排除 s3 传递引入的 apache-client 与 netty-nio-client，统一使用 url-connection-client -->
+    <!-- S3Client / S3Configuration / model / BucketUtils -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>s3</artifactId>
-      <exclusions>
-        <exclusion>
-          <groupId>software.amazon.awssdk</groupId>
-          <artifactId>apache-client</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>software.amazon.awssdk</groupId>
-          <artifactId>netty-nio-client</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
-    <!-- StsClient / StsAssumeRoleCredentialsProvider；同样排除 apache/netty 客户端 -->
+    <!-- StsClient / StsAssumeRoleCredentialsProvider -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sts</artifactId>
-      <exclusions>
-        <exclusion>
-          <groupId>software.amazon.awssdk</groupId>
-          <artifactId>apache-client</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>software.amazon.awssdk</groupId>
-          <artifactId>netty-nio-client</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
     <!-- auth / regions / sdk-core / retries 由上面两个传递引入 -->
-    <!-- 同步客户端的 HTTP 实现，S3ClientFactory 显式指定 UrlConnectionHttpClient -->
+    <!-- 同步客户端的 HTTP 实现，S3Client.builder() 运行时必需 -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>url-connection-client</artifactId>
+      <scope>runtime</scope>
     </dependency>
 
     <!-- ========== Kafka / Kafka Connect ========== -->
@@ -126,14 +106,17 @@
       <artifactId>parquet-hadoop</artifactId>
       <version>${parquet.version}</version>
     </dependency>
-    <!-- parquet-hadoop 把 hadoop 声明为 provided；AvroParquetReader.builder 重载签名引用
-         org.apache.hadoop.fs.Path，编译期解析重载需要该类，故保留 hadoop-client-api 仅供编译
-         （shade 阶段整包排除，不进入 fat jar）；运行时本地读取走 InputFile 路径不触碰 hadoop 类 -->
+    <!-- parquet-hadoop 把 hadoop 声明为 provided，这里必须显式引入 org.apache.hadoop.conf.Configuration -->
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-client-api</artifactId>
       <version>${hadoop.version}</version>
-      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-runtime</artifactId>
+      <version>${hadoop.version}</version>
+      <scope>runtime</scope>
     </dependency>
     <!-- io.confluent.connect.avro.AvroData / AvroDataConfig -->
     <dependency>
@@ -225,7 +208,6 @@
       <groupId>com.mysql</groupId>
       <artifactId>mysql-connector-j</artifactId>
       <version>8.0.33</version>
-      <scope>provided</scope>
     </dependency>
 
     <!-- ========== 日志 ========== -->
@@ -293,13 +275,6 @@
                     <exclude>META-INF/*.SF</exclude>
                     <exclude>META-INF/*.DSA</exclude>
                     <exclude>META-INF/*.RSA</exclude>
-                  </excludes>
-                </filter>
-                <!-- 编译期专用依赖：hadoop-client-api 仅用于解析 AvroParquetReader 重载签名，不进 fat jar -->
-                <filter>
-                  <artifact>org.apache.hadoop:*</artifact>
-                  <excludes>
-                    <exclude>**</exclude>
                   </excludes>
                 </filter>
               </filters>
