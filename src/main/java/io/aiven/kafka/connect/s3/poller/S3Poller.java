@@ -97,7 +97,9 @@ public final class S3Poller implements AutoCloseable {
         final Path downloadDir = StringUtils.isNotBlank(config.poll.downloadDir)
                 ? Path.of(config.poll.downloadDir)
                 : null;
-        final AWSV2SourceClient s3Client = new AWSV2SourceClient(s3SourceConfig, downloadDir);
+        // path-style 按存储服务选择：AWS/腾讯云 COS 用 virtual-hosted-style，MinIO 等本地服务用 path-style
+        final AWSV2SourceClient s3Client = new AWSV2SourceClient(s3SourceConfig, downloadDir,
+                config.s3.pathStyleAccess);
         final FileOffsetStore offsetStore = new FileOffsetStore(Path.of(config.offsets.file),
                 config.poll.ringBufferSize);
         final Optional<FileOffsetStore.Offset> offset = offsetStore.load();

@@ -5,6 +5,9 @@ s3:
   # S3 兼容存储地址（MinIO / OSS / COS 等）；留空则使用官方 AWS
   endpoint: http://127.0.0.1:9000
   region: us-east-1
+  # 是否 path-style 访问：true=桶名在 URL 路径中（MinIO 等无 DNS 解析的本地服务）；
+  # false=桶名作为子域名 virtual-hosted-style（默认，AWS / 腾讯云 COS 要求）
+  pathStyleAccess: true
   bucket: my-bucket
   # 只扫描该前缀下的对象，可为空
   prefix: logs/

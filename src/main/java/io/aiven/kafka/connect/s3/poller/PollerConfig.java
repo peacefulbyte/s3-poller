@@ -119,6 +119,12 @@ public class PollerConfig {
         /** 存储服务地址，如 http://127.0.0.1:9000；为空则使用官方 AWS */
         public String endpoint;
         public String region = "us-east-1";
+        /**
+         * 是否使用 path-style 访问（桶名在 URL 路径中）。
+         * 默认 false=virtual-hosted-style（桶名作为子域名），匹配 AWS / 腾讯云 COS；
+         * MinIO 等本地测试服务无 DNS 解析时设为 true。
+         */
+        public boolean pathStyleAccess = false;
         /** 存储桶名，必填 */
         public String bucket;
         /** 只扫描该前缀下的对象，可为空 */

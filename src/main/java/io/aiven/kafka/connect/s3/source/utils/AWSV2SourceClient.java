@@ -62,11 +62,34 @@ public class AWSV2SourceClient {
     /**
      * @param s3SourceConfig
      *            configuration for Source connector
+     * @param pathStyleAccess
+     *            true=桶名在 URL 路径中（MinIO 等本地服务）；false=桶名作为子域名（AWS / 腾讯云 COS）。
+     */
+    public AWSV2SourceClient(final S3SourceConfig s3SourceConfig, final boolean pathStyleAccess) {
+        this(new S3ClientFactory().createAmazonS3Client(s3SourceConfig, pathStyleAccess), s3SourceConfig, null);
+    }
+
+    /**
+     * @param s3SourceConfig
+     *            configuration for Source connector
      * @param downloadDir
      *            对象下载临时目录，null 时使用系统临时目录
      */
     public AWSV2SourceClient(final S3SourceConfig s3SourceConfig, final Path downloadDir) {
-        this(new S3ClientFactory().createAmazonS3Client(s3SourceConfig), s3SourceConfig, downloadDir);
+        this(s3SourceConfig, downloadDir, false);
+    }
+
+    /**
+     * @param s3SourceConfig
+     *            configuration for Source connector
+     * @param downloadDir
+     *            对象下载临时目录，null 时使用系统临时目录
+     * @param pathStyleAccess
+     *            true=桶名在 URL 路径中（MinIO 等本地服务）；false=桶名作为子域名（AWS / 腾讯云 COS）。
+     */
+    public AWSV2SourceClient(final S3SourceConfig s3SourceConfig, final Path downloadDir,
+            final boolean pathStyleAccess) {
+        this(new S3ClientFactory().createAmazonS3Client(s3SourceConfig, pathStyleAccess), s3SourceConfig, downloadDir);
     }
 
     /**
