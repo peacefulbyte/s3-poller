@@ -62,10 +62,6 @@ public class SourceCommonConfig extends CommonConfig {
         return sourceConfigFragment.getDistributionType();
     }
 
-    public int getMaxPollRecords() {
-        return sourceConfigFragment.getMaxPollRecords();
-    }
-
     public Transformer getTransformer() {
         return TransformerFactory.getTransformer(transformerFragment.getInputFormat());
     }

@@ -34,7 +34,6 @@ import org.apache.commons.lang3.StringUtils;
  */
 public final class SourceConfigFragment extends ConfigFragment {
 
-    private static final String MAX_POLL_RECORDS = "max.poll.records";
     public static final String TARGET_TOPIC = "topic";
     private static final String DISTRIBUTION_TYPE = "distribution.type";
 
@@ -68,9 +67,6 @@ public final class SourceConfigFragment extends ConfigFragment {
         configDef.define(RING_BUFFER_SIZE, ConfigDef.Type.INT, 1000, ConfigDef.Range.atLeast(0),
                 ConfigDef.Importance.MEDIUM, "The number of storage key to store in the ring buffer.");
 
-        configDef.define(MAX_POLL_RECORDS, ConfigDef.Type.INT, 500, ConfigDef.Range.atLeast(1),
-                ConfigDef.Importance.MEDIUM, "Max poll records");
-
         // Offset Storage config group includes target topics
         configDef.define(TARGET_TOPIC, ConfigDef.Type.STRING, null, new ConfigDef.NonEmptyString(),
                 ConfigDef.Importance.MEDIUM, "eg : logging-topic");
@@ -93,15 +89,6 @@ public final class SourceConfigFragment extends ConfigFragment {
      */
     public String getTargetTopic() {
         return cfg.getString(TARGET_TOPIC);
-    }
-
-    /**
-     * Gets the maximum number of records to poll at one time.
-     *
-     * @return The maximum number of records to poll at one time.
-     */
-    public int getMaxPollRecords() {
-        return cfg.getInt(MAX_POLL_RECORDS);
     }
 
     /**
@@ -164,17 +151,6 @@ public final class SourceConfigFragment extends ConfigFragment {
          */
         protected Setter(final Map<String, String> data) {
             super(data);
-        }
-
-        /**
-         * Set the maximum poll records.
-         *
-         * @param maxPollRecords
-         *            the maximum number of records to poll.
-         * @return this
-         */
-        public Setter maxPollRecords(final int maxPollRecords) {
-            return setValue(MAX_POLL_RECORDS, maxPollRecords);
         }
 
         /**
