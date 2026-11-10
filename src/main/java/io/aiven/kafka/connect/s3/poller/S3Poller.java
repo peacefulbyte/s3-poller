@@ -19,6 +19,7 @@ package io.aiven.kafka.connect.s3.poller;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -52,8 +53,8 @@ import org.slf4j.LoggerFactory;
  * <ul>
  * <li>每轮轮询结束时先 {@link OutputSink#flush()} 确认送达，成功才推进断点；
  * Kafka 发送失败时 flush 抛 IOException，断点不推进，重启后整批重发</li>
- * <li>断点文件同时维护最近已消费对象的 key→eTag 映射，重启后预填迭代器的去重缓冲
- * 与 eTag 表：key 相同但 eTag 不同（文件被覆盖）的对象会重新消费</li>
+ * <li>断点维护最近提交进度的 key→eTag 映射；重启先恢复最后对象，其余完成条目
+ * 预填去重缓冲，版本变化或缺失时保守重放</li>
  * <li>单轮输出条数受 {@code poll.maxPollRecords} 限制，防止持续有新对象时
  * 断点长时间得不到持久化</li>
  * </ul>
@@ -85,13 +86,14 @@ public final class S3Poller implements AutoCloseable {
 
     /**
      * 按配置组装轮询器：旧配置映射 → S3 客户端 → 断点存储 → 迭代器 → 输出层。
-     * 不会发起网络请求（S3 客户端与扫描都是懒加载）。
+     * S3 恢复与扫描均为懒加载；MySQL 断点存储会在组装时访问数据库。
      *
      * @param config
      *            已校验的 YAML 配置。
      * @return 就绪的轮询器。
      */
     public static S3Poller create(final PollerConfig config) {
+        config.validate();
         final S3SourceConfig s3SourceConfig = new S3SourceConfig(toSourceProps(config));
         // 临时文件下载目录：为空时交给 AWSV2SourceClient 使用系统临时目录
         final Path downloadDir = StringUtils.isNotBlank(config.poll.downloadDir)
@@ -104,20 +106,34 @@ public final class S3Poller implements AutoCloseable {
         final OffsetStore offsetStore = config.offsets.type().equalsIgnoreCase("mysql")
                 ? MySqlOffsetStore.create(config)
                 : new FileOffsetStore(Path.of(config.offsets.file), config.poll.ringBufferSize);
-        final Optional<OffsetStore.Offset> offset = offsetStore.load();
-        // 重启后：断点对象从 recordCount 处续读（兜底，对象被覆盖时迭代器会忽略该续读从头消费），
-        // 已消费对象 key→eTag 映射预填去重缓冲与 eTag 表
-        final Map<String, String> processedKeys = offset.map(OffsetStore.Offset::processedKeys).orElse(Map.of());
-        final S3SourceRecordIterator iterator = new S3SourceRecordIterator(s3SourceConfig,
-                TransformerFactory.getTransformer(config.inputFormat()), s3Client,
-                key -> offset
-                        .filter(o -> config.s3.bucket.equals(o.bucket()) && key.equals(o.objectKey()))
-                        .map(OffsetStore.Offset::recordCount)
-                        .orElse(0L),
-                processedKeys);
         final OutputSink sink = config.output.type() == PollerConfig.OutputType.FILE
                 ? new FileOutputSink(config.output.file, config.inputFormat())
                 : new KafkaOutputSink(config.output.kafka, config.inputFormat());
+        return create(config, offsetStore, sink, s3Client);
+    }
+
+    /** 生产与故障注入验证共用的组装入口。 */
+    static S3Poller create(final PollerConfig config, final OffsetStore offsetStore, final OutputSink sink,
+            final AWSV2SourceClient s3Client) {
+        config.validate();
+        final S3SourceConfig sourceConfig = new S3SourceConfig(toSourceProps(config));
+        final Optional<OffsetStore.Offset> offset = offsetStore.load()
+                .filter(o -> config.s3.bucket.equals(o.bucket()));
+        final Map<String, String> completedKeys = new LinkedHashMap<>();
+        offset.ifPresent(o -> o.processedKeys().forEach((key, eTag) -> {
+            // 最后断点可能只提交了半个文件，不能作为已完成对象过滤。
+            if (!key.equals(o.objectKey()) && StringUtils.isNotBlank(eTag)) {
+                completedKeys.put(key, eTag);
+            }
+        }));
+        final S3SourceRecordIterator iterator = new S3SourceRecordIterator(sourceConfig,
+                TransformerFactory.getTransformer(config.inputFormat()), s3Client,
+                (final String key, final String eTag) -> offset
+                        .filter(o -> key.equals(o.objectKey()) && StringUtils.isNotBlank(eTag)
+                                && eTag.equals(o.processedKeys().get(key)))
+                        .map(OffsetStore.Offset::recordCount)
+                        .orElse(0L),
+                completedKeys, offset.map(OffsetStore.Offset::objectKey).orElse(null));
         return new S3Poller(config, offsetStore, sink, iterator, s3Client, config.s3.bucket);
     }
 
@@ -130,32 +146,40 @@ public final class S3Poller implements AutoCloseable {
      *             输出层 flush 失败（如 Kafka 发送失败），此时断点未推进。
      */
     public long pollOnce() throws IOException {
-        long produced = 0;
-        String lastKey = null;
-        String lastETag = null;
-        long lastRecordCount = 0;
-        final long maxRecords = config.poll.maxPollRecords;
-        while (iterator.hasNext() && (maxRecords <= 0 || produced < maxRecords)) {
-            final PollerRecord record = iterator.next().toPollerRecord();
-            sink.write(record);
-            produced++;
-            lastKey = record.nativeKey();
-            lastETag = record.nativeETag();
-            lastRecordCount = record.recordCount();
+        if (stopped.get()) {
+            throw new IllegalStateException("轮询器已停止，必须从持久化断点重新创建实例");
         }
-        if (produced > 0) {
-            // 先确认送达再推进断点：flush 抛错时断点不动，重启后重发本批（at-least-once）
-            sink.flush();
-            offsetStore.save(bucket, lastKey, lastRecordCount, lastETag);
-            LOGGER.info("本轮输出 {} 条记录，断点已保存: {} 的第 {} 条，eTag={}", produced, lastKey, lastRecordCount,
-                    lastETag);
+        try {
+            long produced = 0;
+            String lastKey = null;
+            String lastETag = null;
+            long lastRecordCount = 0;
+            final long maxRecords = config.poll.maxPollRecords;
+            while ((maxRecords <= 0 || produced < maxRecords) && iterator.hasNext()) {
+                final PollerRecord record = iterator.next().toPollerRecord();
+                sink.write(record);
+                produced++;
+                lastKey = record.nativeKey();
+                lastETag = record.nativeETag();
+                lastRecordCount = record.recordCount();
+            }
+            if (produced > 0) {
+                // 全批确认成功后才保存；失败实例不可继续，重启后重发未提交记录。
+                sink.flush();
+                offsetStore.save(bucket, lastKey, lastRecordCount, lastETag);
+                LOGGER.info("本轮输出 {} 条记录，断点已保存: {} 的第 {} 条，eTag={}", produced, lastKey, lastRecordCount,
+                        lastETag);
+            }
+            return produced;
+        } catch (final IOException | RuntimeException e) {
+            stop();
+            throw e;
         }
-        return produced;
     }
 
     /**
      * 运行轮询循环，直到 {@link #stop()} 被调用或线程被中断。
-     * 无数据或发生异常时休眠 {@code poll.intervalSeconds} 秒后继续。
+     * 无数据时按配置等待；处理异常直接向入口传播，禁止越过失败批次。
      */
     public void run() {
         LOGGER.info("轮询器启动: bucket={}, inputFormat={}, output={}, 断点存储={}", config.s3.bucket,
@@ -171,10 +195,9 @@ public final class S3Poller implements AutoCloseable {
                 LOGGER.warn("轮询线程被中断，退出");
                 break;
             } catch (final Exception e) {
-                LOGGER.error("轮询异常，{} 秒后继续: {}", config.poll.intervalSeconds, e.getMessage(), e);
-                if (sleepQuietly(TimeUnit.SECONDS.toMillis(config.poll.intervalSeconds))) {
-                    break;
-                }
+                stop();
+                LOGGER.error("轮询失败，停止推进，重启后从持久化断点恢复: {}", e.getMessage(), e);
+                throw new IllegalStateException("轮询失败，未提交记录需要重试", e);
             }
         }
         LOGGER.info("轮询器已退出");
@@ -188,18 +211,10 @@ public final class S3Poller implements AutoCloseable {
     @Override
     public void close() throws IOException {
         stop();
-        sink.close();
-        s3Client.shutdown();
-    }
-
-    /** 休眠并处理中断；返回 true 表示已被中断，调用方应退出 */
-    private boolean sleepQuietly(final long millis) {
-        try {
-            Thread.sleep(millis);
-            return false;
-        } catch (final InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return true;
+        try (sink; iterator) {
+            // 只清理资源，关闭期间送达的记录不推进断点。
+        } finally {
+            s3Client.shutdown();
         }
     }
 

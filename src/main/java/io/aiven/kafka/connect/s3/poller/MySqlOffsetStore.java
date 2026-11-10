@@ -39,8 +39,9 @@ import org.slf4j.LoggerFactory;
  * <p>
  * 表结构（启动时幂等创建，缺省 {@code s3_offset}）：
  * <ul>
- * <li>{@code is_current=1} 的行 = 最近断点（bucket / objectKey / recordCount）</li>
- * <li>全部行按自增 {@code id} 排序 = 消费顺序，最近 {@code maxProcessedKeys} 行即已消费窗口</li>
+ * <li>{@code is_current=1} 的行 = 最后已确认的记录断点，对象可能尚未完成</li>
+ * <li>全部行按自增 {@code id} 排序 = 进度提交顺序；窗口包含当前对象的 eTag，
+ * 恢复完成去重集合时必须排除当前对象，由轮询器先校验版本并续读</li>
  * <li>{@code uk_bucket_key_hash (bucket, key_hash)} 唯一键；{@code key_hash} 为 object_key 的
  * SHA-256 十六进制，避免 utf8mb4 下 bucket+object_key 复合索引超 InnoDB 3072 字节上限；
  * 覆盖重消费时先删后插，新行 id 排到窗口尾部，与文件版 remove+append 语义一致</li>
@@ -137,7 +138,7 @@ public final class MySqlOffsetStore implements OffsetStore {
                 LOGGER.info("MySQL 断点表无断点记录，将从桶首开始消费: bucket={}", bucket);
                 return Optional.empty();
             }
-            // 已消费窗口：最近 N 行 key→eTag（含断点行），按 id 升序返回（尾部最新，与文件版一致）
+            // 最近 N 个提交过进度的 key→eTag，含可能未完成的当前断点，由轮询器拆分恢复状态。
             final Map<String, String> keys = new LinkedHashMap<>();
             query(conn,
                     "SELECT object_key, e_tag FROM (SELECT id, object_key, e_tag FROM `" + table

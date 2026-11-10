@@ -24,6 +24,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,13 +33,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 基于本地 JSON 文件的断点存储实现，替代 Kafka Connect 的 offset storage。
+ * 基于本地 JSON 文件的断点存储实现。
  *
  * <p>
- * 保存最近一个<b>已完整消费</b>的 S3 对象：bucket / objectKey / recordCount，
- * 同时维护最近 {@code maxProcessedKeys} 个已消费对象的 key→eTag 映射。
- * 进程重启后轮询器把该映射预填进迭代器的环形缓冲与 eTag 表，扫描时
- * 用 key + eTag 联合判断：key 相同但 eTag 变化（文件被覆盖）的对象会重新消费。
+ * 保存最近一次输出确认后的 bucket / objectKey / recordCount，
+ * 同时维护最近 {@code maxProcessedKeys} 个提交过进度的对象 key→eTag 映射。
+ * 最后断点对象可能尚未完成，重启必须优先校验版本并续读，不能预填为已完成对象。
+ * 其余具有 eTag 的条目供轮询器恢复完成对象去重。
  *
  * <p>
  * 写入采用「临时文件 + 原子移动」：先写 {@code <file>.tmp} 再 rename 覆盖，
@@ -63,8 +64,9 @@ public final class FileOffsetStore implements OffsetStore {
     private final ObjectMapper mapper = new ObjectMapper();
     private final Object lock = new Object();
 
-    /** 内存中的已消费 key→eTag 映射，插入顺序即消费顺序；与偏移文件保持一致 */
+    /** 提交过进度的 key→eTag 映射；最后断点条目不表示已完整消费。 */
     private final Map<String, String> processedKeys = new LinkedHashMap<>();
+    private String storedBucket;
 
     /**
      * 构造断点存储。
@@ -77,7 +79,10 @@ public final class FileOffsetStore implements OffsetStore {
     public FileOffsetStore(final Path file, final int maxProcessedKeys) {
         this.file = file;
         this.maxProcessedKeys = Math.max(1, maxProcessedKeys);
-        load().ifPresent(offset -> processedKeys.putAll(offset.processedKeys()));
+        load().ifPresent(offset -> {
+            storedBucket = offset.bucket();
+            processedKeys.putAll(offset.processedKeys());
+        });
     }
 
     /**
@@ -86,7 +91,7 @@ public final class FileOffsetStore implements OffsetStore {
      * <p>
      * 文件不存在或内容损坏时返回空（并告警），表示从桶首重新开始消费。
      *
-     * @return 最近一次完整消费的偏移；没有则 {@code Optional.empty()}。
+     * @return 最近一次已确认的记录断点；没有则 {@code Optional.empty()}。
      */
     @Override
     public Optional<Offset> load() {
@@ -104,7 +109,7 @@ public final class FileOffsetStore implements OffsetStore {
                     processed.fields().forEachRemaining(entry -> keys.put(entry.getKey(),
                             entry.getValue().isNull() ? null : entry.getValue().asText()));
                 } else if (processed != null && processed.isArray()) {
-                    // 旧格式：仅 key 列表，无 eTag 信息，按「已消费」处理（与旧行为一致）
+                    // 旧格式没有版本信息，由轮询器保守重放，不作为可靠完成凭据。
                     processed.forEach(keyNode -> keys.put(keyNode.asText(), null));
                 }
                 return Optional.of(new Offset(node.path(BUCKET).asText(), node.path(OBJECT_KEY).asText(),
@@ -117,12 +122,12 @@ public final class FileOffsetStore implements OffsetStore {
     }
 
     /**
-     * 保存断点。一个对象完整消费完后调用，用于下次重启续读。
+     * 保存断点。批次输出全部确认后调用，最后对象允许尚未到 EOF。
      *
      * @param bucket
      *            存储桶名。
      * @param objectKey
-     *            已完整消费的对象 key。
+     *            本批最后一条已确认记录的对象 key。
      * @param recordCount
      *            该对象内已处理的记录数。
      * @param eTag
@@ -133,7 +138,11 @@ public final class FileOffsetStore implements OffsetStore {
     @Override
     public void save(final String bucket, final String objectKey, final long recordCount, final String eTag) {
         synchronized (lock) {
-            // 维护已消费 key→eTag 映射：去重后追加到尾部，超出上限裁剪最旧的
+            if (!Objects.equals(storedBucket, bucket)) {
+                processedKeys.clear();
+                storedBucket = bucket;
+            }
+            // 提交进度的 key 去重后追加，最后条目可能未完成；超出上限裁剪最旧的。
             processedKeys.remove(objectKey);
             processedKeys.put(objectKey, eTag);
             while (processedKeys.size() > maxProcessedKeys) {

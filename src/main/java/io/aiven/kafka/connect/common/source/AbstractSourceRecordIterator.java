@@ -20,8 +20,10 @@ import java.io.InputStream;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -58,12 +60,12 @@ import org.slf4j.Logger;
  */
 public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T extends AbstractSourceRecord<K, N, T>>
         implements
-            Iterator<T> {
+            Iterator<T>, AutoCloseable {
     /**
      * Function that returns the number of records already extracted for a native item. Used to resume reading an
      * object from the middle after a restart; returns 0 when the object has not been processed before.
      */
-    private final Function<K, Long> initialRecordCounts;
+    private final BiFunction<K, String, Long> initialRecordCounts;
 
     /** The configuration for the source */
     private final SourceCommonConfig sourceConfig;
@@ -82,6 +84,11 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
      * by the inner record.
      */
     private Iterator<T> outer;
+    /** 保留流所有权，支持 EOF、失败和提前退出时清理。 */
+    private Stream<T> currentRecords;
+    private Stream<N> nativeItems;
+    private boolean initialized;
+    private boolean closed;
 
     /** Check if the native item key is part of the 'target' files configured to be extracted from Azure */
     private final FileMatching fileMatching;
@@ -125,7 +132,7 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
      *            值为 null 表示旧断点无 eTag 信息，仅预填环形缓冲。
      */
     public AbstractSourceRecordIterator(final SourceCommonConfig sourceConfig, final Transformer transformer,
-            final int ringBufferSize, final Function<K, Long> initialRecordCounts,
+            final int ringBufferSize, final BiFunction<K, String, Long> initialRecordCounts,
             final Map<K, String> initialProcessedKeys) {
         super();
 
@@ -170,6 +177,11 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
      * @return A stream of natvie objects. May be empty but not {@code null}.
      */
     abstract protected Stream<N> getNativeItemStream(K offset);
+
+    /** 优先恢复未完成对象；默认没有待恢复对象。 */
+    protected Stream<N> getInitialNativeItemStream() {
+        return Stream.empty();
+    }
 
     /**
      *
@@ -217,22 +229,64 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
 
     @Override
     final public boolean hasNext() {
-        final boolean outerHasNext;
+        if (closed) {
+            return false;
+        }
+        boolean scanned = false;
         try {
-            outerHasNext = outer.hasNext();
-        } catch (final RuntimeException e) {
-            // 对象下载/解析失败（如 IfMatch 412、网络抖动）：丢弃当前对象状态（不记入去重缓冲），
-            // 向上抛出让轮询器本轮失败；下轮重新扫描会再次遇到该对象并重新下载，避免数据丢失
-            outer = Collections.emptyIterator();
-            lastSeenNativeKey = null;
-            lastSeenNativeETag = null;
+            if (!initialized) {
+                setNativeItems(getInitialNativeItemStream());
+                initialized = true;
+            }
+            while (true) {
+                if (outer.hasNext()) {
+                    return true;
+                }
+                finishCurrentObject();
+                if (inner.hasNext()) {
+                    currentRecords = convert(inner.next());
+                    outer = currentRecords.iterator();
+                    continue;
+                }
+                if (nativeItems != null) {
+                    nativeItems.close();
+                    nativeItems = null;
+                }
+                // 每次探测最多开启一轮扫描，空桶和全量去重时正常返回。
+                if (scanned) {
+                    return false;
+                }
+                setNativeItems(getNativeItemStream(ObjectUtils.getIfNull(ringBuffer.getNextEjected(), () -> {
+                    getLogger().info("{} set, no alternative present in buffer will begin consuming from {}",
+                            SourceConfigFragment.NATIVE_START_KEY, nativeStartKey);
+                    return nativeStartKey;
+                })));
+                scanned = true;
+            }
+        } catch (final RuntimeException | Error e) {
+            try {
+                close();
+            } catch (final RuntimeException | Error cleanup) {
+                e.addSuppressed(cleanup);
+            }
             throw e;
         }
-        if (!outerHasNext && lastSeenNativeKey != null) {
-            // 上一个对象的记录已全部产出：key 与 eTag 同时记入去重缓冲/表，并清理被挤出 key 的 eTag；
-            // eTag 必须在此刻（而非放行时）更新，否则消费失败会导致该 key 在下轮扫描被永久跳过；
-            // 断点持久化由轮询器拿到记录后完成
-            // update the buffer to contain this new objectKey
+    }
+
+    private void setNativeItems(final Stream<N> items) {
+        nativeItems = items;
+        inner = items.map(fileMatching).filter(taskAssignment).filter(Optional::isPresent)
+                .map(Optional::get).iterator();
+    }
+
+    /** 仅正常 EOF 才更新运行期去重；持久化仍由输出确认后的轮询器负责。 */
+    private void finishCurrentObject() {
+        if (currentRecords != null) {
+            currentRecords.close();
+            currentRecords = null;
+        }
+        outer = Collections.emptyIterator();
+        if (lastSeenNativeKey != null) {
             final K ejected = ringBuffer.add(lastSeenNativeKey);
             if (ejected != null) {
                 processedETags.remove(ejected);
@@ -240,24 +294,35 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
             if (lastSeenNativeETag != null) {
                 processedETags.put(lastSeenNativeKey, lastSeenNativeETag);
             }
+            lastSeenNativeKey = null;
+            lastSeenNativeETag = null;
         }
-        if (!inner.hasNext() && !outer.hasNext()) {
-            // 当前批次已读完，重新扫描存储桶；起点优先取环形缓冲中最后处理过的 key
-            inner = getNativeItemStream(ObjectUtils.getIfNull(ringBuffer.getNextEjected(), () -> {
-                getLogger().info("{} set, no alternative present in buffer will begin consuming from {}",
-                        SourceConfigFragment.NATIVE_START_KEY, nativeStartKey);
-                return nativeStartKey;
-            })).map(fileMatching).filter(taskAssignment).filter(Optional::isPresent).map(Optional::get).iterator();
-        }
-        while (!outer.hasNext() && inner.hasNext()) {
-            outer = convert(inner.next()).iterator();
-        }
-        return outer.hasNext();
     }
 
     @Override
     final public T next() {
+        if (!hasNext()) {
+            throw new NoSuchElementException();
+        }
         return outer.next();
+    }
+
+    @Override
+    public final void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        lastSeenNativeKey = null;
+        lastSeenNativeETag = null;
+        outer = Collections.emptyIterator();
+        inner = Collections.emptyIterator();
+        try (Stream<N> items = nativeItems; Stream<T> records = currentRecords) {
+            // 提前关闭不标记完成，也不推进持久化断点。
+        } finally {
+            nativeItems = null;
+            currentRecords = null;
+        }
     }
 
     @Override
@@ -398,7 +463,7 @@ public abstract class AbstractSourceRecordIterator<K extends Comparable<K>, N, T
             overrideContextTopic(context);
             sourceRecord.setContext(context);
             // 断点续读：查询该对象已处理的记录数，解析时跳过；文件被覆盖时从头消费，旧 recordCount 失效
-            sourceRecord.setRecordCount(overwritten ? 0L : initialRecordCounts.apply(itemName));
+            sourceRecord.setRecordCount(overwritten ? 0L : initialRecordCounts.apply(itemName, getNativeETag(nativeItem)));
             return Optional.of(sourceRecord);
         }
 

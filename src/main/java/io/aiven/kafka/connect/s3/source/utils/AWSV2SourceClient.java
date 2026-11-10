@@ -34,6 +34,8 @@ import org.apache.commons.io.function.IOSupplier;
 import org.apache.commons.lang3.StringUtils;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
@@ -164,6 +166,14 @@ public class AWSV2SourceClient {
         return getS3ObjectStream(startToken).map(S3Object::key).iterator();
     }
 
+    /** 按准确 key 恢复对象；请求失败直接传播，不能跳过未完成断点。 */
+    public S3Object getObjectMetadata(final String objectKey) {
+        final HeadObjectResponse metadata = s3Client.headObject(HeadObjectRequest.builder()
+                .bucket(bucketName).key(objectKey).build());
+        return S3Object.builder().key(objectKey).size(metadata.contentLength())
+                .eTag(metadata.eTag()).lastModified(metadata.lastModified()).build();
+    }
+
     /**
      * 下载对象：流式下载到本地临时文件，返回惰性的文件流交给解析器逐条消费；
      * 内存占用 O(缓冲区)，大对象不再整块进入 JVM 堆。
@@ -173,7 +183,7 @@ public class AWSV2SourceClient {
      * @param expectedETag
      *            扫描（listObjects）时拿到的 eTag，作为 IfMatch 前置条件；为 {@code null} 时不校验。
      *            扫描到下载之间文件被覆盖时服务端返回 412 使下载失败，
-     *            避免按旧断点续读跳过新内容造成数据丢失，下轮扫描会按新 eTag 从头消费。
+     *            失败向上抛出并停止轮询，重启后重新校验版本，禁止沿用旧版本进度。
      * @return 惰性文件流。
      */
     public IOSupplier<InputStream> getObject(final String objectKey, final String expectedETag) {

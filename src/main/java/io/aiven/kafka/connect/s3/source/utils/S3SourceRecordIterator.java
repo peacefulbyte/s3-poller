@@ -18,7 +18,7 @@ package io.aiven.kafka.connect.s3.source.utils;
 
 import java.io.InputStream;
 import java.util.Map;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
 import io.aiven.kafka.connect.common.source.AbstractSourceRecordIterator;
@@ -43,6 +43,8 @@ public final class S3SourceRecordIterator
 
     /** The AWS client that provides the S3Objects */
     private final AWSV2SourceClient sourceClient;
+    /** 最后断点对象优先恢复，不能被普通扫描中的其他对象覆盖断点。 */
+    private final String resumeKey;
 
     /**
      * 构造 S3 迭代器。
@@ -54,18 +56,26 @@ public final class S3SourceRecordIterator
      * @param sourceClient
      *            S3 客户端。
      * @param initialRecordCounts
-     *            查询对象已处理记录数的函数，用于断点续读。
+     *            根据 key 和当前 eTag 查询已确认记录数，用于同版本断点续读。
      * @param initialProcessedKeys
-     *            已处理的对象 key→eTag 映射，预填去重缓冲与 eTag 表。
+     *            已完成的对象 key→eTag 映射，不包含最后断点对象。
+     * @param resumeKey
+     *            优先恢复的断点对象 key；无断点时为 null。
      */
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "source client has stores mutable fields")
     public S3SourceRecordIterator(final S3SourceConfig s3SourceConfig, final Transformer transformer,
-            final AWSV2SourceClient sourceClient, final Function<String, Long> initialRecordCounts,
-            final Map<String, String> initialProcessedKeys) {
+            final AWSV2SourceClient sourceClient, final BiFunction<String, String, Long> initialRecordCounts,
+            final Map<String, String> initialProcessedKeys, final String resumeKey) {
 
         super(s3SourceConfig, transformer, s3SourceConfig.getRingBufferSize(), initialRecordCounts,
                 initialProcessedKeys);
         this.sourceClient = sourceClient;
+        this.resumeKey = resumeKey;
+    }
+
+    @Override
+    protected Stream<S3Object> getInitialNativeItemStream() {
+        return resumeKey == null ? Stream.empty() : Stream.of(resumeKey).map(sourceClient::getObjectMetadata);
     }
 
     @Override

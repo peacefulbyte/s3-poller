@@ -21,14 +21,14 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 断点存储抽象，替代 Kafka Connect 的 offset storage。
+ * 保存输出确认后的记录进度与对象版本信息。
  *
  * <p>
  * 语义约定（at-least-once）：
  * <ul>
- * <li>保存最近一个<b>已完整消费</b>的 S3 对象：bucket / objectKey / recordCount / eTag</li>
- * <li>同时维护最近 {@code maxProcessedKeys} 个已消费对象的 key→eTag 映射，
- * 重启后预填迭代器的环形缓冲与 eTag 表，key 相同但 eTag 不同（文件被覆盖）时重新消费</li>
+ * <li>保存最近一条已确认记录的 bucket / objectKey / recordCount 及对应 eTag</li>
+ * <li>维护最近提交过进度的 key→eTag 映射；最后断点对象可能未完成，必须优先恢复，
+ * 其余具有版本信息的条目才可预填为完成对象；版本变化时从头重放</li>
  * <li>{@link #load()} 失败语义由实现决定；{@link #save} 失败应抛异常，调用方视为致命错误
  * （断点不准会导致重复消费）</li>
  * </ul>
@@ -38,17 +38,17 @@ public interface OffsetStore {
     /**
      * 读取断点。
      *
-     * @return 最近一次完整消费的偏移；没有则 {@code Optional.empty()}。
+     * @return 最近一次已确认的记录断点；没有则 {@code Optional.empty()}。
      */
     Optional<Offset> load();
 
     /**
-     * 保存断点。一个对象完整消费完后调用，用于下次重启续读。
+     * 批次输出全部确认后保存断点，最后对象可能尚未到 EOF。
      *
      * @param bucket
      *            存储桶名。
      * @param objectKey
-     *            已完整消费的对象 key。
+     *            本批最后一条已确认记录的对象 key。
      * @param recordCount
      *            该对象内已处理的记录数。
      * @param eTag
@@ -57,8 +57,8 @@ public interface OffsetStore {
     void save(String bucket, String objectKey, long recordCount, String eTag);
 
     /**
-     * 一条断点记录：最近完整消费的 S3 对象及其内部已处理记录数，
-     * 附带最近已完整消费的对象 key→eTag 映射（尾部为最新）。
+     * 一条断点记录：最后确认的对象及其内部记录数，
+     * 附带提交过进度的 key→eTag 映射；最后对象的条目不表示完整消费。
      */
     final class Offset {
         private final String bucket;
@@ -74,12 +74,12 @@ public interface OffsetStore {
             this.processedKeys = Collections.unmodifiableMap(processedKeys);
         }
 
-        /** 已完整消费的对象所在存储桶 */
+        /** 最后断点所在存储桶 */
         public String bucket() {
             return bucket;
         }
 
-        /** 已完整消费的对象 key，重启后从此 key 之后继续扫描 */
+        /** 最后断点对象 key，重启必须先恢复它，不能从其后直接扫描 */
         public String objectKey() {
             return objectKey;
         }
@@ -89,7 +89,7 @@ public interface OffsetStore {
             return recordCount;
         }
 
-        /** 最近已完整消费的对象 key→eTag 映射，尾部为最新；重启后用于预填去重缓冲与 eTag 表 */
+        /** 提交过进度的 key→eTag 映射；预填完成集合前必须排除最后断点对象 */
         public Map<String, String> processedKeys() {
             return processedKeys;
         }

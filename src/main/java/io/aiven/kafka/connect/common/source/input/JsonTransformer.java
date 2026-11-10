@@ -20,6 +20,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
@@ -85,8 +86,7 @@ public class JsonTransformer extends Transformer {
                     action.accept(new SchemaAndValue(null, objectMapper.readValue(line, Object.class)));
                     return true;
                 } catch (IOException e) {
-                    LOGGER.error("Error reading input stream: {}", e.getMessage(), e);
-                    return false;
+                    throw new UncheckedIOException("读取或解析 JSONL 失败", e);
                 }
             }
         };

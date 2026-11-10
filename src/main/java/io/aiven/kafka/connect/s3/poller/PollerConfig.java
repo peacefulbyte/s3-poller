@@ -79,6 +79,10 @@ public class PollerConfig {
         compressionType(); // 校验并提前抛错
         if (output.type() == OutputType.KAFKA) {
             Objects.requireNonNull(output.kafka.bootstrapServers, "output.kafka.bootstrapServers 不能为空");
+            if (!"all".equals(output.kafka.acks) && !"-1".equals(output.kafka.acks)
+                    && !"1".equals(output.kafka.acks)) {
+                throw new IllegalArgumentException("output.kafka.acks 必须为 all、-1 或 1；不支持无需确认的 0");
+            }
             if (output.kafka.topic == null && poll.filePattern == null) {
                 throw new IllegalArgumentException("output.kafka.topic 与 poll.filePattern 至少配置一个，用于确定目标 topic");
             }
@@ -170,7 +174,7 @@ public class PollerConfig {
     public static class Parse {
         /** 输入格式：avro / parquet / jsonl / bytes / bytes-line */
         public String inputFormat = "jsonl";
-        /** bytes 格式的切块大小；bytes-line 格式的单行最大字节数（超长行跳过并告警） */
+        /** bytes 格式的切块大小；bytes-line 格式的单行最大字节数（超长行抛错停止，不丢弃） */
         public int maxBufferSize = 4096;
     }
 
@@ -203,6 +207,11 @@ public class PollerConfig {
         public String bootstrapServers;
         /** 固定目标 topic；为空则使用 filePattern 中提取的 topic */
         public String topic;
+        /**
+         * 发送确认级别：all / -1 / 1，默认 all；不支持无需确认的 0。
+         * 断点恢复针对 Poller 异常中断，允许重复；Kafka 自身故障导致的消息丢失风险由配置者承担。
+         * 1 仅等待 Leader 确认，尚未复制时 Leader 故障可能丢失已确认消息。
+         */
         public String acks = "all";
         public Security security = new Security();
     }
@@ -219,7 +228,7 @@ public class PollerConfig {
     public static class Offsets {
         /** 断点存储类型：file=本地 JSON 文件 / mysql=MySQL 表 */
         public String type = "file";
-        /** 断点文件路径；type=file 时使用，进程重启后从该文件记录的 key 之后继续扫描 */
+        /** 断点文件路径；type=file 时使用，重启先恢复最后断点对象，再继续扫描 */
         public String file = "./offsets.json";
         /** type=mysql 时的连接配置 */
         public MySql mysql = new MySql();

@@ -18,6 +18,7 @@ package io.aiven.kafka.connect.common.source.input;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.function.Consumer;
@@ -81,8 +82,7 @@ public class ByteArrayTransformer extends Transformer {
 
                     return false;
                 } catch (IOException e) {
-                    LOGGER.error("Error trying to advance inputStream: {}", e.getMessage(), e);
-                    return false;
+                    throw new UncheckedIOException("读取字节块失败", e);
                 }
             }
         };

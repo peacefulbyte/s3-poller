@@ -20,6 +20,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -110,7 +111,7 @@ public class ParquetTransformer extends Transformer {
                         return true;
                     }
                 } catch (IOException e) {
-                    logger.error("Error reading record: {}", e.getMessage(), e);
+                    throw new UncheckedIOException("读取 Parquet 记录失败", e);
                 }
                 return false;
             }

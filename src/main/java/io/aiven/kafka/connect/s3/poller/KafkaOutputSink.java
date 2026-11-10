@@ -25,6 +25,7 @@ import io.aiven.kafka.connect.common.source.input.InputFormat;
 
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.config.SaslConfigs;
@@ -49,7 +50,7 @@ public final class KafkaOutputSink implements OutputSink {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(KafkaOutputSink.class);
 
-    private final KafkaProducer<byte[], byte[]> producer;
+    private final Producer<byte[], byte[]> producer;
     /** 配置的固定 topic；为空时使用记录携带的 topic */
     private final String topic;
     private final InputFormat inputFormat;
@@ -66,6 +67,19 @@ public final class KafkaOutputSink implements OutputSink {
      *            输入格式，决定 value 编码方式。
      */
     public KafkaOutputSink(final PollerConfig.KafkaOutput config, final InputFormat inputFormat) {
+        this(config, inputFormat, createProducer(config));
+    }
+
+    /** 允许验证程序控制发送确认，生产构造仍使用 KafkaProducer。 */
+    KafkaOutputSink(final PollerConfig.KafkaOutput config, final InputFormat inputFormat,
+            final Producer<byte[], byte[]> producer) {
+        this.producer = producer;
+        this.topic = config.topic;
+        this.inputFormat = inputFormat;
+        this.encoder = new RecordValueEncoder();
+    }
+
+    private static Producer<byte[], byte[]> createProducer(final PollerConfig.KafkaOutput config) {
         final Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers);
         props.put(ProducerConfig.ACKS_CONFIG, config.acks);
@@ -77,10 +91,7 @@ public final class KafkaOutputSink implements OutputSink {
             props.put(SaslConfigs.SASL_JAAS_CONFIG, plainJaas(config.security.username, config.security.password));
         }
         // PLAINTEXT 使用客户端默认值，无需额外配置
-        this.producer = new KafkaProducer<>(props);
-        this.topic = config.topic;
-        this.inputFormat = inputFormat;
-        this.encoder = new RecordValueEncoder();
+        return new KafkaProducer<>(props);
     }
 
     @Override
@@ -103,7 +114,7 @@ public final class KafkaOutputSink implements OutputSink {
     @Override
     public void flush() throws IOException {
         producer.flush();
-        final long failed = failedSends.getAndSet(0);
+        final long failed = failedSends.get();
         if (failed > 0) {
             throw new IOException("本批次有 " + failed + " 条记录发送失败，断点不推进，重启后整批重发");
         }
@@ -111,8 +122,11 @@ public final class KafkaOutputSink implements OutputSink {
 
     @Override
     public void close() throws IOException {
-        producer.flush();
-        producer.close();
+        try {
+            producer.flush();
+        } finally {
+            producer.close();
+        }
     }
 
     /**

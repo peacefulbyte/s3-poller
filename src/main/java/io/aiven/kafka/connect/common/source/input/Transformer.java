@@ -18,6 +18,7 @@ package io.aiven.kafka.connect.common.source.input;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.util.Spliterator;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -42,14 +43,7 @@ public abstract class Transformer {
         // 解析入口：按具体格式创建 Spliterator 逐条读取；skipRecords 用于从文件中段续读（断点恢复）
         final StreamSpliterator spliterator = createSpliterator(inputStreamIOSupplier, streamLength, context,
                 sourceConfig);
-        return StreamSupport.stream(spliterator, false).onClose(() -> {
-            spliterator.close();
-            // 下载/解析失败时关闭后抛出，向上传播而不是静默结束，
-            // 否则失败对象会被外层当作已消费记入去重缓冲，造成数据丢失
-            if (spliterator.hasFailed()) {
-                throw new IllegalStateException("对象流处理失败（下载或解析异常），需重新扫描处理");
-            }
-        }).skip(skipRecords);
+        return StreamSupport.stream(spliterator, false).onClose(spliterator::close).skip(skipRecords);
     }
 
     /**
@@ -95,17 +89,6 @@ public abstract class Transformer {
         private boolean closed;
 
         /**
-         * 输入流打开/读取/解析过程中是否发生过异常。异常在 tryAdvance 中被吞掉以保证迭代器收敛，
-         * 由 {@link Transformer#getRecords} 的 onClose 检查本标志统一抛出，向上传播失败。
-         */
-        private boolean failed;
-
-        /** @return 输入流处理过程中是否发生过异常。 */
-        public final boolean hasFailed() {
-            return failed;
-        }
-
-        /**
          * Constructor.
          *
          * @param logger
@@ -119,8 +102,8 @@ public abstract class Transformer {
         }
 
         /**
-         * Attempt to read the next record. If there is no record to read or an error occurred return false. If a record
-         * was created, call {@code action.accept()} with the record.
+         * 读取下一条记录；只有正常 EOF 返回 false，读取或解析异常必须向上传播。
+         * 产出记录时调用 {@code action.accept()}。
          *
          * @param action
          *            the Consumer to call if record is created.
@@ -134,15 +117,24 @@ public abstract class Transformer {
         abstract protected void doClose();
 
         public final void close() {
-            doClose();
-            try {
-                if (inputStream != null) {
-                    inputStream.close();
-                    inputStream = null; // NOPMD setting null to release resources
-                    closed = true;
-                }
+            if (closed) {
+                return;
+            }
+            closed = true;
+            final InputStream opened = inputStream;
+            inputStream = null;
+            try (opened) {
+                doClose();
             } catch (IOException e) {
-                logger.error("Error trying to close inputStream: {}", e.getMessage(), e);
+                throw new UncheckedIOException("关闭对象输入流失败", e);
+            }
+        }
+
+        private void closeOnFailure(final Throwable failure) {
+            try {
+                close();
+            } catch (RuntimeException | Error cleanup) {
+                failure.addSuppressed(cleanup);
             }
         }
 
@@ -166,28 +158,24 @@ public abstract class Transformer {
             if (closed) {
                 return false;
             }
-            boolean result = false;
             try {
                 if (inputStream == null) {
-                    try {
-                        inputStream = inputStreamIOSupplier.get();
-                        inputOpened(inputStream);
-                    } catch (IOException e) {
-                        logger.error("Error trying to open inputStream: {}", e.getMessage(), e);
-                        failed = true;
-                        close();
-                        return false;
-                    }
+                    inputStream = inputStreamIOSupplier.get();
+                    inputOpened(inputStream);
                 }
-                result = doAdvance(action);
-            } catch (RuntimeException e) { // NOPMD must catch runtime exception here.
-                logger.error("Error trying to advance data: {}", e.getMessage(), e);
-                failed = true;
+                final boolean result = doAdvance(action);
+                if (!result) {
+                    close();
+                }
+                return result;
+            } catch (IOException e) {
+                final UncheckedIOException failure = new UncheckedIOException("打开对象输入流失败", e);
+                closeOnFailure(failure);
+                throw failure;
+            } catch (RuntimeException | Error e) {
+                closeOnFailure(e);
+                throw e;
             }
-            if (!result) {
-                close();
-            }
-            return result;
         }
 
         @Override

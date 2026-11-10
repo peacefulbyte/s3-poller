@@ -3,6 +3,7 @@ package io.aiven.kafka.connect.common.source.input;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.function.Consumer;
@@ -28,7 +29,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>
  * 单行最大字节数受 {@code transformer.max.buffer.size} 限制（复用 bytes 的切块大小配置），
- * 超过的行整行丢弃并告警——不做截断，避免切出半个多字节字符导致消费端无法解码。
+ * 超过上限立即抛错停止，保留断点供调整上限后重试，不丢弃或截断记录。
  */
 public class ByteLineTransformer extends Transformer {
 
@@ -49,14 +50,12 @@ public class ByteLineTransformer extends Transformer {
                     streamLength);
             return emptySpliterator(inputStreamIOSupplier);
         }
-        // 单行最大字节数：超出整行丢弃（不截断，避免切断多字节字符）
+        // 单行有界缓冲：超限抛错，避免丢弃记录或无限占用内存。
         final int maxLineBytes = sourceConfig.getTransformerMaxBufferSize();
         return new StreamSpliterator(LOGGER, inputStreamIOSupplier) {
 
             /** 当前行的字节缓冲 */
             private final ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream();
-            /** 当前行已超出上限，丢弃其剩余字节直到下一个换行符 */
-            private boolean lineTooLong = false;
             /** 底层流读缓冲，跨 doAdvance 调用复用，避免未消费字节丢失 */
             private final byte[] buffer = new byte[READ_CHUNK];
             /** 读缓冲中已消费到的位置 */
@@ -99,28 +98,23 @@ public class ByteLineTransformer extends Transformer {
                                 bufferPos++;
                                 // 一行结束：剥离行尾 CR 后输出；空行跳过继续找下一行
                                 final byte[] line = finishLine();
-                                lineTooLong = false;
                                 if (line != null) {
                                     action.accept(new SchemaAndValue(null, line));
                                     return true;
                                 }
                                 break;
-                            } else if (!lineTooLong) {
-                                lineBuffer.write(buffer[bufferPos]);
-                                bufferPos++;
-                                if (lineBuffer.size() > maxLineBytes) {
-                                    lineTooLong = true;
-                                    lineBuffer.reset();
-                                    LOGGER.warn("行超过最大长度 {} 字节，丢弃该行剩余内容", maxLineBytes);
-                                }
                             } else {
+                                if (lineBuffer.size() >= maxLineBytes) {
+                                    throw new IllegalStateException("行超过最大长度 " + maxLineBytes
+                                            + " 字节，停止解析；调整 maxBufferSize 后重试");
+                                }
+                                lineBuffer.write(buffer[bufferPos]);
                                 bufferPos++;
                             }
                         }
                     }
                 } catch (IOException e) {
-                    LOGGER.error("Error trying to advance inputStream: {}", e.getMessage(), e);
-                    return false;
+                    throw new UncheckedIOException("读取字节行失败", e);
                 }
             }
 

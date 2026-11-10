@@ -190,7 +190,7 @@ public enum CompressionType {
         return new IOSupplier<InputStream>() {
             @Override
             public InputStream get() throws IOException {
-                return autoDecompress(input.get());
+                return openDecompressed(input, CompressionType::autoDecompress);
             }
         };
     }
@@ -206,9 +206,25 @@ public enum CompressionType {
         return new IOSupplier<InputStream>() {
             @Override
             public InputStream get() throws IOException {
-                return decompress(input.get());
+                return openDecompressed(input, CompressionType.this::decompress);
             }
         };
+    }
+
+    /** 解压器初始化失败时也要关闭已下载的原始文件流。 */
+    private static InputStream openDecompressed(final IOSupplier<InputStream> supplier,
+            final IOFunction<InputStream, InputStream> decoder) throws IOException {
+        final InputStream raw = supplier.get();
+        try {
+            return decoder.apply(raw);
+        } catch (IOException | RuntimeException | Error e) {
+            try {
+                raw.close();
+            } catch (IOException | RuntimeException | Error cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
+        }
     }
 
     /**

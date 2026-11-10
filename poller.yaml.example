@@ -42,7 +42,7 @@ parse:
   # 输入格式：avro / parquet / jsonl / bytes / bytes-line
   # bytes-line=按行切分原始字节透传（不解析、不解码，消费端按实际编码解码）
   inputFormat: jsonl
-  # bytes 格式的切块大小；bytes-line 格式的单行最大字节数，超长行跳过并告警
+  # bytes 格式的切块大小；bytes-line 格式的单行最大字节数，超长行抛错停止，调整上限后重试
   maxBufferSize: 4096
 
 output:
@@ -56,6 +56,10 @@ output:
     bootstrapServers: localhost:9092
     # 固定目标 topic；为空则使用 filePattern 中提取的 topic
     topic: target-topic
+    # 确认级别：all / -1 / 1，默认 all；不支持无需确认的 0
+    # 每批全部记录按所选级别确认成功后才保存断点；Poller 异常中断后恢复，允许重复
+    # 1 仅等待 Leader 确认；尚未复制时 Leader 故障可能丢失已确认消息
+    # Kafka 自身故障导致的消息丢失风险由配置者承担
     acks: all
     security:
       protocol: PLAINTEXT
@@ -65,8 +69,8 @@ output:
 offsets:
   # 断点存储类型：file=本地 JSON 文件 / mysql=MySQL 8.0 表
   type: file
-  # type=file 时使用；进程重启后从该文件记录的 key 之后继续扫描，
-  # 同时用其中的已消费对象列表预填去重缓冲
+  # type=file 时使用；重启优先校验最后断点对象的版本并按记录数续读，
+  # 其余具有 eTag 的历史条目预填完成去重集合
   file: ./offsets.json
   # type=mysql 时使用（下表字段按需替换）
   mysql:
