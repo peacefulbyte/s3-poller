@@ -34,7 +34,7 @@ poll:
   # 已消费对象 key 的去重缓冲大小，重启后由断点文件预填
   ringBufferSize: 1000
   # 单轮轮询最多输出的记录数，达到后先持久化断点再继续；0 表示不限制
-  maxPollRecords: 500
+  maxPollRecords: 10000
   # 对象下载临时目录；为空使用系统临时目录。大对象建议配置专用目录，启动时会清理其中残留
   downloadDir: ""
 
@@ -60,7 +60,7 @@ output:
     # 每批全部记录按所选级别确认成功后才保存断点；Poller 异常中断后恢复，允许重复
     # 1 仅等待 Leader 确认；尚未复制时 Leader 故障可能丢失已确认消息
     # Kafka 自身故障导致的消息丢失风险由配置者承担
-    acks: all
+    acks: 1
     security:
       protocol: PLAINTEXT
       username: ""
