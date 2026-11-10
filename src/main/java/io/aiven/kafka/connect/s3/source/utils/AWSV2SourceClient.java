@@ -204,7 +204,9 @@ public class AWSV2SourceClient {
      */
     public static InputStream downloadToTempFile(final InputStream source, final Path downloadDir)
             throws IOException {
-        final Path tmp = Files.createTempFile(downloadDir, "s3-poller-", ".obj");
+        final Path tmp = downloadDir == null
+                ? Files.createTempFile("s3-poller-", ".obj")
+                : Files.createTempFile(downloadDir, "s3-poller-", ".obj");
         try {
             Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING);
             final InputStream fileIn = Files.newInputStream(tmp);
